@@ -20,6 +20,7 @@ from pymongo import MongoClient
 # Config (match app.db.mongo)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 STIX_PATH = os.path.join(SCRIPT_DIR, "arifacts", "small_stix.json")
+STIX_EDITED_PATH = os.path.join(SCRIPT_DIR, "arifacts", "small_stix_edited.json")
 BASE_URL = os.environ.get("MITRE_API_BASE", "http://localhost:8000")
 API_BASE = f"{BASE_URL}/api/mitre"
 MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://root:password@localhost:27017/?authSource=admin")
@@ -41,11 +42,11 @@ def drop_collections() -> None:
         client.close()
 
 
-def load_payload():
-    if not os.path.isfile(STIX_PATH):
-        print(f"STIX file not found: {STIX_PATH}", file=sys.stderr)
+def load_payload(path: str):
+    if not os.path.isfile(path):
+        print(f"STIX file not found: {path}", file=sys.stderr)
         sys.exit(1)
-    with open(STIX_PATH, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -65,7 +66,8 @@ def ok(name: str, resp: requests.Response, want_status: int | None = None) -> bo
 def main() -> None:
     drop_collections()
 
-    payload = load_payload()
+    payload = load_payload(STIX_PATH)
+    payload_edited = load_payload(STIX_EDITED_PATH)
     version_from_bundle = payload.get("x_mitre_version", "14.1")
     spec_version = payload.get("spec_version", "2.1")
 
@@ -125,7 +127,7 @@ def main() -> None:
     # --- PUT /api/mitre/{x_mitre_version} (replace/update) ---
     print("\n7. PUT /api/mitre/{x_mitre_version} (replace)")
     url = f"{API_BASE}/{version_from_bundle}"
-    r = requests.put(url, json=payload)
+    r = requests.put(url, json=payload_edited)
     if not ok("PUT replace", r, 200):
         print(f"     Response: {r.text[:300]}")
     else:

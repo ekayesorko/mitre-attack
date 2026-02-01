@@ -1,7 +1,7 @@
-"""MongoDB access for MITRE documents. Three collectionections:
+"""MongoDB access for MITRE documents. Three collections:
 
 - current_schema: single document with current x_mitre_version
-- mitre_entities: latest MITRE entities as individual documents (_id = entity id)
+- mitre_entities: latest MITRE entities as individual documents (_id = entity id), with optional embedding (name+description)
 - mitre_documents: whole MITRE bundle per version (_id = x_mitre_version)
 """
 import os
@@ -10,6 +10,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from app.schemas.mitre import MitreBundle, MitreMetadata, MitreObject
+from app.services.embeddings import _name_description_text, embed_texts_batch
 
 
 class MitreDBError(Exception):
@@ -24,7 +25,7 @@ class DuplicateVersionError(MitreDBError):
 CURRENT_DOC_ID = "current"
 DATABASE_NAME = "mitre_db"
 
-# collectionection names
+# collection names
 COLLECTION_CURRENT_SCHEMA = "current_schema"
 COLLECTION_LATEST_ENTITIES = "mitre_entities"
 COLLECTION_DOCUMENTS = "mitre_documents"
@@ -87,6 +88,27 @@ async def get_mitre_version() -> str | None:
         raise MitreDBError(f"Failed to get MITRE version: {e}") from e
 
 
+async def _entity_docs_with_embeddings(content: MitreBundle) -> list[dict]:
+    """
+    Build entity documents with embedding field for name+description.
+    Uses LM Studio (nomic-embed) via OpenAI-compatible embeddings API.
+    """
+    entity_docs = []
+    docs_with_text = []
+    for obj in content.objects:
+        doc = {"_id": obj.id, **obj.model_dump(mode="json")}
+        entity_docs.append(doc)
+        text = _name_description_text(obj.name, obj.description)
+        if text:
+            docs_with_text.append((doc, text))
+    if docs_with_text:
+        texts = [t for _, t in docs_with_text]
+        embeddings = await embed_texts_batch(texts)
+        for (doc, _), vec in zip(docs_with_text, embeddings):
+            doc["embedding"] = vec
+    return entity_docs
+
+
 async def get_mitre_content() -> tuple[MitreBundle, MitreMetadata] | None:
     """Return (content, metadata) for current version, or None."""
     try:
@@ -122,7 +144,7 @@ async def put_mitre_document(
     metadata: MitreMetadata,
 ) -> None:
     """
-    Store MITRE data in three collectionections:
+    Store MITRE data in three collections:
     - current_schema: set current version
     - mitre_entities: replace with latest entities (one doc per entity, _id = entity id)
     - mitre_documents: store whole bundle for this version (_id = version)
@@ -143,14 +165,9 @@ async def put_mitre_document(
         }
         await docs_collection.replace_one({"_id": x_mitre_version}, doc, upsert=True)
 
-        # 2. Replace latest entities: clear and insert current version's entities (each with _id = entity id)
+        # 2. Replace latest entities: clear and insert current version's entities (each with _id = entity id, plus embedding for name+description)
         await entities_collection.delete_many({})
-        entity_docs = []
-        for obj in content.objects:
-            entity_docs.append({
-                "_id": obj.id,
-                **obj.model_dump(mode="json"),
-            })
+        entity_docs = await _entity_docs_with_embeddings(content)
         if entity_docs:
             await entities_collection.insert_many(entity_docs)
 
@@ -196,12 +213,9 @@ async def insert_mitre_document(
         raise MitreDBError(f"Failed to store MITRE document: {e}") from e
 
     try:
-        # 2. Replace latest entities with this version's entities
+        # 2. Replace latest entities with this version's entities (with name+description embeddings)
         await entities_collection.delete_many({})
-        entity_docs = [
-            {"_id": obj.id, **obj.model_dump(mode="json")}
-            for obj in content.objects
-        ]
+        entity_docs = await _entity_docs_with_embeddings(content)
         if entity_docs:
             await entities_collection.insert_many(entity_docs)
 
