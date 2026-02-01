@@ -37,7 +37,7 @@ services:
 
   # LM Studio - Local LLM Server
   lm-studio:
-    image: ghcr.io/lmstudio-ai/lmstudio:latest
+    image: mamema/lm-studio
     container_name: mitre-lm-studio
     restart: unless-stopped
     ports:
