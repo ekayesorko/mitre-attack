@@ -1,0 +1,2 @@
+nicegui[standard]>=1.4.0
+httpx>=0.25.0

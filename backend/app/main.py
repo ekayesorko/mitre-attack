@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import mitre
+from app.api import chat, mitre
 from app.db import init_db, close_db
 
 
@@ -25,6 +25,7 @@ app = FastAPI(
 )
 
 app.include_router(mitre.router, prefix="/api/mitre", tags=["mitre"])
+app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 
 
 @app.get("/health")

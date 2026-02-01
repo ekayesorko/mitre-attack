@@ -48,6 +48,7 @@ services:
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=password
       - LM_STUDIO_URI=http://lm-studio:1234/v1
+      - CHAT_MODEL=google/gemma-3-4b
       - EMBEDDING_MODEL=nomic-embed-text
     depends_on:
       - mongodb
