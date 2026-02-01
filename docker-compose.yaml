@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  # MongoDB - NoSQL Database
+  mongodb:
+    image: mongo:latest
+    container_name: mitre-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: password
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    networks:
+      - mitre_network
+
+  # Neo4j - Graph Database
+  neo4j:
+    image: neo4j:latest
+    container_name: mitre-neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    environment:
+      NEO4J_AUTH: neo4j/password
+      NEO4J_apoc_export_file_enabled: "true"
+      NEO4J_apoc_import_file_enabled: "true"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    networks:
+      - mitre_network
+
+  # LM Studio - Local LLM Server
+  lm-studio:
+    image: ghcr.io/lmstudio-ai/lmstudio:latest
+    container_name: mitre-lm-studio
+    restart: unless-stopped
+    ports:
+      - "1234:1234"  # API endpoint
+      - "8501:8501"  # Web UI (Streamlit)
+    environment:
+      - LM_STUDIO_SERVER_PORT=1234
+    volumes:
+      - lm_studio_models:/home/user/.cache/lm-studio/models
+      - lm_studio_config:/home/user/.config/lm-studio
+    networks:
+      - mitre_network
+
+volumes:
+  mongodb_data:
+  mongodb_config:
+  neo4j_data:
+  neo4j_logs:
+  lm_studio_models:
+  lm_studio_config:
+
+networks:
+  mitre_network:
+    driver: bridge
