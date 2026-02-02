@@ -6,14 +6,16 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import chat, mitre
-from app.db import init_db, close_db
+from app.api import chat, graph, mitre
+from app.db import close_db, close_neo4j, init_db, init_neo4j
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await init_neo4j()
     yield
+    await close_neo4j()
     await close_db()
 
 
@@ -25,6 +27,7 @@ app = FastAPI(
 )
 
 app.include_router(mitre.router, prefix="/api/mitre", tags=["mitre"])
+app.include_router(graph.router, prefix="/api/graph", tags=["graph"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 
 

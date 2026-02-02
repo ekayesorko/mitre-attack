@@ -15,6 +15,7 @@ from pymongo.errors import DuplicateKeyError, PyMongoError
 
 logger = logging.getLogger(__name__)
 
+from app.db.neo4j import store_mitre_bundle
 from app.schemas.mitre import MitreBundle, MitreMetadata, MitreObject
 from app.services.embeddings import _name_description_text, embed_texts_batch
 
@@ -281,6 +282,11 @@ async def put_mitre_document(
             {"_id": CURRENT_DOC_ID, "x_mitre_version": x_mitre_version},
             upsert=True,
         )
+        # 4. Sync to Neo4j (best-effort; log and continue on failure)
+        try:
+            await store_mitre_bundle(content)
+        except Exception as e:
+            logger.warning("Neo4j sync failed after put_mitre_document: %s", e)
     except PyMongoError as e:
         raise MitreDBError(f"Failed to store MITRE document: {e}") from e
 
@@ -329,5 +335,10 @@ async def insert_mitre_document(
             {"_id": CURRENT_DOC_ID, "x_mitre_version": x_mitre_version},
             upsert=True,
         )
+        # 4. Sync to Neo4j (best-effort; log and continue on failure)
+        try:
+            await store_mitre_bundle(content)
+        except Exception as e:
+            logger.warning("Neo4j sync failed after insert_mitre_document: %s", e)
     except PyMongoError as e:
         raise MitreDBError(f"Failed to store MITRE document: {e}") from e
