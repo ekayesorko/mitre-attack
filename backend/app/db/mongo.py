@@ -3,11 +3,17 @@
 - current_schema: single document with current x_mitre_version
 - mitre_entities: latest MITRE entities as individual documents (_id = entity id), with optional embedding (name+description)
 - mitre_documents: whole MITRE bundle per version (_id = x_mitre_version)
+
+Vector search uses MongoDB Atlas $vectorSearch (requires a vector search index on mitre_entities.embedding).
+Set VECTOR_SEARCH_INDEX_NAME to match your Atlas index (default: mitre_entities_vector).
 """
+import logging
 import os
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import DuplicateKeyError, PyMongoError
+
+logger = logging.getLogger(__name__)
 
 from app.schemas.mitre import MitreBundle, MitreMetadata, MitreObject
 from app.services.embeddings import _name_description_text, embed_texts_batch
@@ -46,7 +52,7 @@ async def init_db() -> None:
     """Connect to MongoDB and ensure indexes. Call once at app startup."""
     global _client, _db
     try:
-        uri = os.environ.get("MONGODB_URI", "mongodb://root:password@localhost:27017/?authSource=admin")
+        uri = os.environ.get("MONGODB_URI", "mongodb://root:password@localhost:27017/?authSource=admin&directConnection=true")
         _client = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=5000)
         await _client.admin.command("ping")
         _db = _client[DATABASE_NAME]
@@ -56,6 +62,9 @@ async def init_db() -> None:
         await _db[COLLECTION_LATEST_ENTITIES].create_index([("type", 1)])
         # mitre_documents: keyed by version (_id), no extra index needed
         await _db[COLLECTION_DOCUMENTS].create_index([("_id", 1)])
+
+        # Vector search index (Atlas only; createSearchIndexes only works on Atlas)
+        await _ensure_vector_search_index()
     except PyMongoError as e:
         _client = None
         _db = None
@@ -136,6 +145,101 @@ async def get_mitre_content() -> tuple[MitreBundle, MitreMetadata] | None:
         raise
     except PyMongoError as e:
         raise MitreDBError(f"Failed to get MITRE content: {e}") from e
+
+
+# Atlas vector search index name. Create in Atlas UI (Search → Create Index → JSON editor).
+# Example index definition for collection "mitre_entities":
+#   { "fields": [ { "type": "vector", "path": "embedding", "numDimensions": 768, "similarity": "cosine" } ] }
+# nomic-embed-text uses 768 dimensions.
+VECTOR_SEARCH_INDEX_NAME = os.environ.get("VECTOR_SEARCH_INDEX_NAME", "mitre_entities_vector")
+VECTOR_EMBEDDING_DIMENSIONS = 768
+
+
+async def _ensure_vector_search_index() -> None:
+    """
+    Create the vector search index on mitre_entities if missing.
+    Only succeeds on MongoDB Atlas (createSearchIndexes is Atlas-only).
+    On local MongoDB we log and continue; search_entities_by_embedding will use the in-app fallback.
+    """
+    try:
+        res = await _get_db().command(
+            {
+                "createSearchIndexes": COLLECTION_LATEST_ENTITIES,
+                "indexes": [
+                    {
+                        "name": VECTOR_SEARCH_INDEX_NAME,
+                        "type": "vectorSearch",
+                        "definition": {
+                            "fields": [
+                                {
+                                    "type": "vector",
+                                    "path": "embedding",
+                                    "numDimensions": VECTOR_EMBEDDING_DIMENSIONS,
+                                    "similarity": "cosine",
+                                }
+                            ]
+                        },
+                    }
+                ],
+            }
+        )
+        if res.get("ok") == 1 and res.get("indexesCreated"):
+            logger.info(
+                "Vector search index created: %s",
+                [x.get("name") for x in res["indexesCreated"]],
+            )
+        elif res.get("ok") == 1:
+            # Index may already exist (no indexesCreated)
+            logger.debug("Vector search index already exists or creation skipped")
+    except PyMongoError as e:
+        logger.warning(
+            "Could not create vector search index (use Atlas or rely on in-app fallback): %s",
+            e,
+        )
+
+
+async def search_entities_by_embedding(
+    query_embedding: list[float],
+    top_k: int = 5,
+) -> list[dict]:
+    """
+    Return top_k MITRE entities most similar to query_embedding using MongoDB Atlas $vectorSearch.
+    Requires a vector search index on the collection (path: embedding, cosine similarity).
+    Each returned dict has entity fields (type, name, description, etc.), no embedding, plus _score.
+    """
+    if not query_embedding or top_k <= 0:
+        return []
+    num_candidates = max(100, top_k * 20)  # Atlas recommendation for ANN recall
+    pipeline = [
+        {
+            "$vectorSearch": {
+                "index": VECTOR_SEARCH_INDEX_NAME,
+                "path": "embedding",
+                "queryVector": query_embedding,
+                "numCandidates": num_candidates,
+                "limit": top_k,
+            }
+        },
+        {
+            "$project": {
+                "type": 1,
+                "name": 1,
+                "description": 1,
+                "id": 1,
+                "x_mitre_shortname": 1,
+                "_score": {"$meta": "vectorSearchScore"},
+            }
+        },
+    ]
+    try:
+        collection = _get_db()[COLLECTION_LATEST_ENTITIES]
+        cursor = collection.aggregate(pipeline)
+        docs = await cursor.to_list(length=top_k)
+    except PyMongoError as e:
+        raise MitreDBError(
+            f"Vector search failed (is Atlas vector index '{VECTOR_SEARCH_INDEX_NAME}' defined?): {e}"
+        ) from e
+    return list(docs)
 
 
 async def put_mitre_document(

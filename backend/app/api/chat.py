@@ -1,6 +1,7 @@
 """Chatbot API routes — LM Studio (google/gemma-3-4b)."""
 from fastapi import APIRouter, HTTPException
 
+from app.db.mongo import MitreDBError
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.chat import chat
 
@@ -18,8 +19,18 @@ async def chat_endpoint(body: ChatRequest) -> ChatResponse:
         messages_dicts = [{"role": m.role, "content": m.content} for m in body.messages]
         reply, model = await chat(messages_dicts, body.system)
         return ChatResponse(reply=reply, model=model)
+    except MitreDBError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Database or vector search unavailable: {e!s}",
+        ) from e
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=str(e) or "LLM service unavailable (is LM Studio running?).",
+        ) from e
     except Exception as e:
         raise HTTPException(
             status_code=503,
-            detail=f"Chat service unavailable (is LM Studio running?): {e!s}",
+            detail=f"Chat service unavailable: {e!s}",
         ) from e

@@ -3,14 +3,14 @@ version: '3.8'
 services:
   # MongoDB - NoSQL Database
   mongodb:
-    image: mongo:latest
+    image: mongodb/mongodb-atlas-local:8.0.3
     container_name: mitre-mongodb
     restart: unless-stopped
     ports:
       - "27017:27017"
     environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: password
+      MONGODB_INITDB_ROOT_USERNAME: root
+      MONGODB_INITDB_ROOT_PASSWORD: password
     volumes:
       - mongodb_data:/data/db
       - mongodb_config:/data/configdb
@@ -43,7 +43,9 @@ services:
     expose:
       - "8000"
     environment:
-      - MONGODB_URI=mongodb://root:password@mongodb:27017/?authSource=admin
+      # For Atlas Local / single-node replica set in Docker, use directConnection=true so the driver
+      # does not try to connect to internal replica-set hostnames (e.g. container ID) that are not resolvable.
+      - MONGODB_URI=mongodb://root:password@mongodb:27017/?authSource=admin&directConnection=true
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=password
@@ -53,12 +55,9 @@ services:
     depends_on:
       - mongodb
       - neo4j
-      - lm-studio
     networks:
       - mitre_network
 
-  # LM Studio - Local LLM Server (API only; no Web UI in Docker)
-  # Use the desktop app at https://lmstudio.ai for Web UI, or call the API at http://localhost:1234
   # lm-studio:
   #   image: mamema/lm-studio
   #   container_name: mitre-lm-studio

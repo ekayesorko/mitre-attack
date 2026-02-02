@@ -8,6 +8,7 @@ from app.db.mongo import (
     init_db,
     insert_mitre_document,
     put_mitre_document,
+    search_entities_by_embedding,
 )
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "init_db",
     "insert_mitre_document",
     "put_mitre_document",
+    "search_entities_by_embedding",
 ]

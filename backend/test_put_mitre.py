@@ -23,7 +23,7 @@ STIX_PATH = os.path.join(SCRIPT_DIR, "arifacts", "small_stix.json")
 STIX_EDITED_PATH = os.path.join(SCRIPT_DIR, "arifacts", "small_stix_edited.json")
 BASE_URL = os.environ.get("MITRE_API_BASE", "http://localhost:8000")
 API_BASE = f"{BASE_URL}/api/mitre"
-MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://root:password@localhost:27017/?authSource=admin")
+MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://root:password@localhost:27017/?authSource=admin&directConnection=true")
 DATABASE_NAME = "mitre_db"
 COLLECTIONS = ("current_schema", "mitre_entities", "mitre_documents")
 
