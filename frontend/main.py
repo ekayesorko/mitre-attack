@@ -7,8 +7,10 @@ import httpx
 from nicegui import ui
 
 # Backend API base URL (e.g. http://localhost:8000 when running backend locally)
-API_BASE = os.environ.get("API_BASE", "http://localhost:8000")
-CHAT_API = f"{API_BASE.rstrip('/')}/api/chat/"
+API_BASE = os.environ.get("API_BASE", "http://localhost:8000").rstrip("/")
+CHAT_API = f"{API_BASE}/api/chat/"
+SEARCH_API = f"{API_BASE}/api/search/"
+GRAPH_SVG_URL = f"{API_BASE}/api/graph/svg"
 
 
 def add_nav():
@@ -110,9 +112,128 @@ def chat_page():
 @ui.page("/graph")
 def graph_page():
     add_nav()
-    with ui.column().classes("w-full max-w-2xl mx-auto mt-8 gap-4"):
-        ui.label("Graph").classes("text-2xl font-bold")
-        ui.label("Coming soon.").classes("text-gray-500")
+
+    # Two-column layout: left = search + results, right = SVG slot
+    page_height = "calc(100vh - 4rem)"
+    with ui.row().classes("w-full gap-0").style(
+        f"height: {page_height}; min-height: 0; align-items: stretch;"
+    ):
+        # Left panel: search bar + results
+        with ui.column().classes("w-80 shrink-0 border-r border-gray-200 bg-base-200/30").style(
+            "min-height: 0; overflow: hidden; display: flex; flex-direction: column;"
+        ):
+            ui.label("Search entities").classes("text-lg font-semibold pt-4 px-4")
+            with ui.row().classes("w-full mx-4 mt-2 items-center gap-2"):
+                search_input = (
+                    ui.input(placeholder="Search by name or description...")
+                    .classes("flex-1 min-w-0")
+                    .props("outlined rounded dense clearable")
+                )
+                search_btn = ui.button("Search").props("rounded flat")
+
+            results_container = ui.column().classes("w-full gap-2 mt-4 px-4 pb-4").style(
+                "flex: 1 1 0; min-height: 0; overflow-y: auto;"
+            )
+
+        # Right panel: SVG slot
+        with ui.column().classes("flex-1 min-w-0 bg-base-100").style(
+            "min-height: 0; overflow: auto; display: flex; flex-direction: column;"
+        ):
+            svg_slot = ui.column().classes("w-full h-full min-h-[400px] p-4 items-center justify-center")
+            with svg_slot:
+                ui.label("Search and click a result to view its graph.").classes("text-gray-500")
+
+    search_results: list[dict] = []
+
+    async def do_search():
+        q = (search_input.value or "").strip()
+        if not q:
+            return
+        search_btn.set_enabled(False)
+        results_container.clear()
+        with results_container:
+            ui.spinner("dots", size="sm")
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.get(SEARCH_API, params={"q": q, "top_k": 10})
+            r.raise_for_status()
+            data = r.json()
+            search_results.clear()
+            search_results.extend(data.get("results", []))
+        except httpx.HTTPStatusError as e:
+            search_results.clear()
+            search_results.append(
+                {"error": f"{e.response.status_code} — {(e.response.text or '')[:200]}"}
+            )
+        except Exception as e:
+            search_results.clear()
+            search_results.append({"error": str(e)})
+        finally:
+            _render_results()
+            search_btn.set_enabled(True)
+
+    def _render_results():
+        results_container.clear()
+        with results_container:
+            if not search_results:
+                ui.label("No results.").classes("text-gray-500")
+                return
+            if len(search_results) == 1 and search_results[0].get("error"):
+                ui.label(f"Error: {search_results[0]['error']}").classes("text-error")
+                return
+            for entry in search_results:
+                name = entry.get("name") or entry.get("id") or "Unnamed"
+                etype = entry.get("type") or ""
+                score = entry.get("score")
+                score_txt = f" {score:.2f}" if score is not None else ""
+                def make_click_handler(ent):
+                    async def handler():
+                        await on_result_click(ent)
+                    return handler
+
+                with ui.card().classes("w-full cursor-pointer hover:bg-primary/10").on(
+                    "click", make_click_handler(entry)
+                ):
+                    ui.label(name).classes("font-medium truncate")
+                    if etype or score_txt:
+                        ui.label(f"{etype}{score_txt}").classes("text-sm text-gray-500")
+
+    async def on_result_click(entry: dict):
+        stix_id = entry.get("id")
+        if not stix_id:
+            return
+        svg_slot.clear()
+        with svg_slot:
+            ui.spinner("dots", size="lg")
+        await _fetch_and_show_svg(stix_id)
+
+    async def _fetch_and_show_svg(stix_id: str):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.get(GRAPH_SVG_URL, params={"stix_id": stix_id})
+            r.raise_for_status()
+            svg_text = r.text
+        except httpx.HTTPStatusError as e:
+            svg_text = None
+            error_msg = f"{e.response.status_code} — {(e.response.text or '')[:300]}"
+        except Exception as e:
+            svg_text = None
+            error_msg = str(e)
+        else:
+            error_msg = None
+
+        svg_slot.clear()
+        with svg_slot:
+            if error_msg:
+                ui.label(f"Failed to load graph: {error_msg}").classes("text-error max-w-xl")
+            elif svg_text:
+                ui.html(svg_text, sanitize=False).classes("w-full")
+            else:
+                ui.label("No graph data for this entity.").classes("text-gray-500")
+
+    # Attach handlers after they are defined
+    search_btn.on_click(do_search)
+    search_input.on("keydown.enter", do_search)
 
 
 if __name__ in {"__main__", "__mp_main__"}:
