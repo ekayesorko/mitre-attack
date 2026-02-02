@@ -211,6 +211,8 @@ async def search_entities_by_embedding(
     if not query_embedding or top_k <= 0:
         return []
     num_candidates = max(100, top_k * 20)  # Atlas recommendation for ANN recall
+    # Fetch extra so that after excluding relationships we still have top_k (filter can't use unindexed 'type')
+    search_limit = max(top_k * 10, 50)
     pipeline = [
         {
             "$vectorSearch": {
@@ -218,14 +220,15 @@ async def search_entities_by_embedding(
                 "path": "embedding",
                 "queryVector": query_embedding,
                 "numCandidates": num_candidates,
-                "limit": top_k,
+                "limit": search_limit,
             }
         },
+        {"$match": {"type": {"$ne": "relationship"}}},
+        {"$limit": top_k},
         {
             "$project": {
                 "type": 1,
                 "name": 1,
-                "description": 1,
                 "id": 1,
                 "x_mitre_shortname": 1,
                 "_score": {"$meta": "vectorSearchScore"},

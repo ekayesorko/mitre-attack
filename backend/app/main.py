@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import chat, graph, mitre
+from app.api import chat, graph, mitre, search
 from app.db import close_db, close_neo4j, init_db, init_neo4j
 
 
@@ -29,6 +29,7 @@ app = FastAPI(
 app.include_router(mitre.router, prefix="/api/mitre", tags=["mitre"])
 app.include_router(graph.router, prefix="/api/graph", tags=["graph"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
+app.include_router(search.router, prefix="/api/search", tags=["search"])
 
 
 @app.get("/health")
