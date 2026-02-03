@@ -11,6 +11,7 @@ from app.db.mongo import (
     list_mitre_versions,
     put_mitre_document,
     search_entities_by_embedding,
+    search_entities_by_text,
 )
 from app.db.neo4j import close_neo4j, init_neo4j, store_mitre_bundle
 
@@ -28,5 +29,6 @@ __all__ = [
     "list_mitre_versions",
     "put_mitre_document",
     "search_entities_by_embedding",
+    "search_entities_by_text",
     "store_mitre_bundle",
 ]

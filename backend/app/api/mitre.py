@@ -197,7 +197,12 @@ async def put_mitre(body: MitreBundle) -> MitrePutResponse:
     Accepts MITRE bundle as JSON; x_mitre_version is taken from the bundle's spec_version.
     Returns 409 if that version already exists.
     """
-    x_mitre_version = body.spec_version
+    x_mitre_version = body.objects[0].x_mitre_version
+    if x_mitre_version is None:
+        raise HTTPException(
+            status_code=400,
+            detail="MITRE version not found in bundle.",
+        )
     metadata = _make_metadata(x_mitre_version, body)
     try:
         await insert_mitre_document(x_mitre_version, body, metadata)

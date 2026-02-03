@@ -196,12 +196,13 @@ async def get_adjacent(stix_id: str) -> dict | None:
 
 
 # Cypher: (a)-[r:USES]->(b) where b has the given stix_id; returns raw a, r, b for graphviz
+#make it bidirectional
 _USES_INTO_CYPHER = """
 MATCH (a)-[r]->(b)
-WHERE b.stix_id = $stix_id
+WHERE b.stix_id = $stix_id OR a.stix_id = $stix_id
 RETURN a, r, b
 """
-
+#make it bidirectional
 
 async def get_uses_into_records(stix_id: str) -> list[dict] | None:
     """

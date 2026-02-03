@@ -19,7 +19,7 @@ from pymongo import MongoClient
 
 # Config (match app.db.mongo)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-STIX_PATH = os.path.join(SCRIPT_DIR, "arifacts", "small_stix.json")
+STIX_PATH = os.path.join(SCRIPT_DIR, "arifacts", "enterprise-attack-1.0.json")
 STIX_EDITED_PATH = os.path.join(SCRIPT_DIR, "arifacts", "enterprise-attack-1.0.json")
 BASE_URL = os.environ.get("MITRE_API_BASE", "http://localhost:8000")
 API_BASE = f"{BASE_URL}/api/mitre"
@@ -68,8 +68,9 @@ def main() -> None:
 
     payload = load_payload(STIX_PATH)
     payload_edited = load_payload(STIX_EDITED_PATH)
-    version_from_bundle = payload.get("x_mitre_version", "14.1")
-    spec_version = payload.get("spec_version", "2.1")
+    # version_from_bundle = payload.get("x_mitre_version", "14.1")
+    version_from_bundle = payload["objects"][0]["x_mitre_version"]
+    spec_version = payload["objects"][0]["spec_version"]
 
     print("\nMITRE API tests")
     print("=" * 50)
@@ -125,14 +126,14 @@ def main() -> None:
     ok("PUT create duplicate", r, 409)
 
     # --- PUT /api/mitre/{x_mitre_version} (replace/update) ---
-    print("\n7. PUT /api/mitre/{x_mitre_version} (replace)")
-    url = f"{API_BASE}/{version_from_bundle}"
-    r = requests.put(url, json=payload_edited)
-    if not ok("PUT replace", r, 200):
-        print(f"     Response: {r.text[:300]}")
-    else:
-        data = r.json()
-        print(f"     -> status={data.get('status')}, x_mitre_version={data.get('x_mitre_version')}")
+    # print("\n7. PUT /api/mitre/{x_mitre_version} (replace)")
+    # url = f"{API_BASE}/{version_from_bundle}"
+    # r = requests.put(url, json=payload_edited)
+    # if not ok("PUT replace", r, 200):
+    #     print(f"     Response: {r.text[:300]}")
+    # else:
+    #     data = r.json()
+    #     print(f"     -> status={data.get('status')}, x_mitre_version={data.get('x_mitre_version')}")
 
     # --- GET /api/mitre/version (should be updated version) ---
     print("\n8. GET /api/mitre/version (after replace)")

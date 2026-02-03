@@ -295,6 +295,32 @@ async def search_entities_by_embedding(
     return list(docs)
 
 
+async def search_entities_by_text(query: str, top_k: int = 10) -> list[dict]:
+    """
+    Match query as case-insensitive substring in name only.
+    Excludes relationships. Returns same shape as vector search (id, type, name, x_mitre_shortname, _score=1.0).
+    """
+    query = (query or "").strip()
+    if not query or top_k <= 0:
+        return []
+    try:
+        collection = _get_db()[COLLECTION_LATEST_ENTITIES]
+        regex = {"$regex": query, "$options": "i"}
+        cursor = collection.find(
+            {
+                "type": {"$ne": "relationship"},
+                "name": regex,
+            },
+            {"_id": 1, "id": 1, "type": 1, "name": 1, "x_mitre_shortname": 1},
+        ).limit(top_k)
+        docs = await cursor.to_list(length=top_k)
+        for d in docs:
+            d["_score"] = 1.0
+        return docs
+    except PyMongoError as e:
+        raise MitreDBError(f"Text search failed: {e}") from e
+
+
 async def put_mitre_document(
     x_mitre_version: str,
     content: MitreBundle,
