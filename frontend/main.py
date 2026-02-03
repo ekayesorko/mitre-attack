@@ -4,22 +4,10 @@ Chat page uses the backend /api/chat endpoint with local conversation history.
 """
 import asyncio
 import json
-import os
 import httpx
 from nicegui import ui
 
-# Backend API base URL (e.g. http://localhost:8000 when running backend locally)
-API_BASE = os.environ.get("API_BASE", "http://localhost:8000").rstrip("/")
-CHAT_API = f"{API_BASE}/api/chat/"
-SEARCH_API = f"{API_BASE}/api/search/"
-GRAPH_SVG_URL = f"{API_BASE}/api/graph/svg"
-MITRE_VERSION_URL = f"{API_BASE}/api/mitre/version"
-MITRE_VERSIONS_URL = f"{API_BASE}/api/mitre/versions"
-MITRE_CONTENT_URL = f"{API_BASE}/api/mitre/"
-
-
-def mitre_download_url(version: str) -> str:
-    return f"{API_BASE}/api/mitre/{version}/download"
+from config import settings
 
 
 def add_nav():
@@ -47,7 +35,7 @@ def mitre_page():
         nonlocal latest_version
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                r = await client.get(MITRE_VERSION_URL)
+                r = await client.get(settings.mitre_version_url)
             r.raise_for_status()
             latest_version = r.json()
             return latest_version.get("x_mitre_version")
@@ -64,7 +52,7 @@ def mitre_page():
         nonlocal versions_list
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                r = await client.get(MITRE_VERSIONS_URL)
+                r = await client.get(settings.mitre_versions_url)
             r.raise_for_status()
             data = r.json()
             versions_list = data.get("versions", [])
@@ -116,7 +104,7 @@ def mitre_page():
                     ui.label(f"{size_kb:.1f} KB").classes("text-gray-500 text-sm w-20 shrink-0")
                     ui.link(
                         "Download",
-                        mitre_download_url(version),
+                        settings.mitre_download_url(version),
                     ).classes("btn btn-sm btn-outline").props("no-caps target=_blank")
 
     with ui.column().classes("w-full max-w-4xl mx-auto mt-6 gap-6 px-4"):
@@ -223,7 +211,7 @@ def mitre_page():
         update_btn.set_enabled(False)
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
-                r = await client.put(f"{API_BASE}/api/mitre/{version}", json=body)
+                r = await client.put(f"{settings.api_base}/api/mitre/{version}", json=body)
             r.raise_for_status()
             data = r.json()
             status.set_text(f"Updated: {data.get('x_mitre_version', version)}")
@@ -261,7 +249,7 @@ def mitre_page():
         create_btn.set_enabled(False)
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
-                r = await client.put(MITRE_CONTENT_URL, json=body)
+                r = await client.put(settings.mitre_content_url, json=body)
             r.raise_for_status()
             data = r.json()
             status.set_text(f"Created: {data.get('x_mitre_version', version)}")
@@ -330,7 +318,7 @@ def chat_page():
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 r = await client.post(
-                    CHAT_API,
+                    settings.chat_api,
                     json={"messages": messages, "system": None},
                 )
             r.raise_for_status()
@@ -421,7 +409,7 @@ def graph_page():
             ui.spinner("dots", size="sm")
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                r = await client.get(SEARCH_API, params={"q": q, "top_k": 10})
+                r = await client.get(settings.search_api, params={"q": q, "top_k": 10})
             r.raise_for_status()
             data = r.json()
             search_results.clear()
@@ -476,7 +464,7 @@ def graph_page():
     async def _fetch_and_show_svg(stix_id: str):
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                r = await client.get(GRAPH_SVG_URL, params={"stix_id": stix_id})
+                r = await client.get(settings.graph_svg_url, params={"stix_id": stix_id})
             r.raise_for_status()
             svg_text = r.text
         except httpx.HTTPStatusError as e:

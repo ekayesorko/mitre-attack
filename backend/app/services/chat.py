@@ -1,21 +1,11 @@
 """Chat completion service via LM Studio with LangChain and RAG (MongoDB embedded entities)."""
 from __future__ import annotations
 
-import logging
-import os
-
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+from app.config import settings
 from app.services.rag import get_relevant_mitre_context
-
-logger = logging.getLogger(__name__)
-
-LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_URI", "http://localhost:1234/v1").rstrip("/")
-if not LM_STUDIO_BASE_URL.endswith("/v1"):
-    LM_STUDIO_BASE_URL = LM_STUDIO_BASE_URL.rstrip("/") + "/v1"
-CHAT_MODEL = os.environ.get("CHAT_MODEL", "google/gemma-3-4b")
-RAG_TOP_K = int(os.environ.get("RAG_TOP_K", "5"))
 
 
 def _to_langchain_message(m: dict) -> HumanMessage | AIMessage | SystemMessage:
@@ -47,9 +37,9 @@ async def chat(
     rag_context = ""
     if last_user_content:
         try:
-            rag_context = await get_relevant_mitre_context(last_user_content, top_k=RAG_TOP_K)
+            rag_context = await get_relevant_mitre_context(last_user_content, top_k=settings.rag_top_k)
         except Exception as e:
-            logger.warning("Chat: RAG context retrieval failed, continuing without context: %s", e)
+            print("Chat: RAG context retrieval failed, continuing without context:", e)
 
     # Build system block: optional user system + RAG context
     system_parts = []
@@ -64,9 +54,9 @@ async def chat(
     system_content = "\n\n".join(system_parts) if system_parts else None
 
     llm = ChatOpenAI(
-        model=CHAT_MODEL,
-        base_url=LM_STUDIO_BASE_URL,
-        api_key=os.environ.get("LM_STUDIO_API_KEY", "lm-studio"),
+        model=settings.chat_model,
+        base_url=settings.lm_studio_base_url,
+        api_key=settings.lm_studio_api_key,
         temperature=0.7,
         max_tokens=1024,
     )
@@ -82,9 +72,9 @@ async def chat(
     try:
         response = await llm.ainvoke(lc_messages)
     except Exception as e:
-        logger.exception("Chat: LLM invocation failed")
+        print("Chat: LLM invocation failed")
         raise RuntimeError(f"LLM unavailable (is LM Studio running?): {e}") from e
 
     reply = (response.content or "").strip() if hasattr(response, "content") else ""
-    model_used = getattr(response, "response_metadata", {}).get("model_name") or CHAT_MODEL
+    model_used = getattr(response, "response_metadata", {}).get("model_name") or settings.chat_model
     return reply, model_used

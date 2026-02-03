@@ -7,11 +7,10 @@
 Vector search uses MongoDB Atlas $vectorSearch (requires a vector search index on mitre_entities.embedding).
 Set VECTOR_SEARCH_INDEX_NAME to match your Atlas index (default: mitre_entities_vector).
 """
-import os
-
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
+from app.config import settings
 from app.db.neo4j import store_mitre_bundle
 from app.schemas.mitre import MitreBundle, MitreMetadata, MitreObject
 from app.services.embeddings import _name_description_text, embed_texts_batch
@@ -50,8 +49,7 @@ async def init_db() -> None:
     """Connect to MongoDB and ensure indexes. Call once at app startup."""
     global _client, _db
     try:
-        uri = os.environ.get("MONGODB_URI", "mongodb://root:password@localhost:27017/?authSource=admin&directConnection=true")
-        _client = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=5000)
+        _client = AsyncIOMotorClient(settings.mongodb_uri, serverSelectionTimeoutMS=5000)
         await _client.admin.command("ping")
         _db = _client[DATABASE_NAME]
 
@@ -198,7 +196,6 @@ async def get_mitre_content_by_version(x_mitre_version: str) -> tuple[MitreBundl
 # Example index definition for collection "mitre_entities":
 #   { "fields": [ { "type": "vector", "path": "embedding", "numDimensions": 768, "similarity": "cosine" } ] }
 # nomic-embed-text uses 768 dimensions.
-VECTOR_SEARCH_INDEX_NAME = os.environ.get("VECTOR_SEARCH_INDEX_NAME", "mitre_entities_vector")
 VECTOR_EMBEDDING_DIMENSIONS = 768
 
 
@@ -214,7 +211,7 @@ async def _ensure_vector_search_index() -> None:
                 "createSearchIndexes": COLLECTION_LATEST_ENTITIES,
                 "indexes": [
                     {
-                        "name": VECTOR_SEARCH_INDEX_NAME,
+                        "name": settings.vector_search_index_name,
                         "type": "vectorSearch",
                         "definition": {
                             "fields": [
@@ -231,18 +228,11 @@ async def _ensure_vector_search_index() -> None:
             }
         )
         if res.get("ok") == 1 and res.get("indexesCreated"):
-            logger.info(
-                "Vector search index created: %s",
-                [x.get("name") for x in res["indexesCreated"]],
-            )
+            print("Vector search index created:", [x.get("name") for x in res["indexesCreated"]])
         elif res.get("ok") == 1:
-            # Index may already exist (no indexesCreated)
-            logger.debug("Vector search index already exists or creation skipped")
+            print("Vector search index already exists or creation skipped")
     except PyMongoError as e:
-        logger.warning(
-            "Could not create vector search index (use Atlas or rely on in-app fallback): %s",
-            e,
-        )
+        print("Could not create vector search index (use Atlas or rely on in-app fallback):", e)
 
 
 async def search_entities_by_embedding(
@@ -262,7 +252,7 @@ async def search_entities_by_embedding(
     pipeline = [
         {
             "$vectorSearch": {
-                "index": VECTOR_SEARCH_INDEX_NAME,
+                "index": settings.vector_search_index_name,
                 "path": "embedding",
                 "queryVector": query_embedding,
                 "numCandidates": num_candidates,
@@ -287,7 +277,7 @@ async def search_entities_by_embedding(
         docs = await cursor.to_list(length=top_k)
     except PyMongoError as e:
         raise MitreDBError(
-            f"Vector search failed (is Atlas vector index '{VECTOR_SEARCH_INDEX_NAME}' defined?): {e}"
+            f"Vector search failed (is Atlas vector index '{settings.vector_search_index_name}' defined?): {e}"
         ) from e
     return list(docs)
 
@@ -361,7 +351,7 @@ async def put_mitre_document(
         try:
             await store_mitre_bundle(content)
         except Exception as e:
-            logger.warning("Neo4j sync failed after put_mitre_document: %s", e)
+            print("Neo4j sync failed after put_mitre_document:", e)
     except PyMongoError as e:
         raise MitreDBError(f"Failed to store MITRE document: {e}") from e
 
@@ -414,6 +404,6 @@ async def insert_mitre_document(
         try:
             await store_mitre_bundle(content)
         except Exception as e:
-            logger.warning("Neo4j sync failed after insert_mitre_document: %s", e)
+            print("Neo4j sync failed after insert_mitre_document:", e)
     except PyMongoError as e:
         raise MitreDBError(f"Failed to store MITRE document: {e}") from e

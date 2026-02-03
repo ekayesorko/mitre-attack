@@ -1,14 +1,9 @@
 """Embedding service for MITRE entity name and description via LM Studio (nomic-embed)."""
 from __future__ import annotations
 
-import os
 from openai import AsyncOpenAI
 
-# LM Studio base URL (OpenAI-compatible) and model id
-LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_URI", "http://localhost:1234/v1").rstrip("/")
-if not LM_STUDIO_BASE_URL.endswith("/v1"):
-    LM_STUDIO_BASE_URL = LM_STUDIO_BASE_URL.rstrip("/") + "/v1"
-EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
+from app.config import settings
 
 
 def _name_description_text(name: str | None, description: str | None) -> str | None:
@@ -59,8 +54,8 @@ async def embed_texts_batch(texts: list[str]) -> list[list[float]]:
     
 
     client = AsyncOpenAI(
-        base_url=LM_STUDIO_BASE_URL,
-        api_key=os.environ.get("LM_STUDIO_API_KEY", "lm-studio"),
+        base_url=settings.lm_studio_base_url,
+        api_key=settings.lm_studio_api_key,
     )
     # Filter to non-empty and remember indices to map back
     indexed = [(i, t.strip()) for i, t in enumerate(texts) if (t or "").strip()]
@@ -69,7 +64,7 @@ async def embed_texts_batch(texts: list[str]) -> list[list[float]]:
     indices, to_encode = zip(*indexed)
     response = await client.embeddings.create(
         input=list(to_encode),
-        model=EMBEDDING_MODEL,
+        model=settings.embedding_model,
     )
     # response.data is in same order as input
     result = [[] for _ in texts]

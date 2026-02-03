@@ -17,13 +17,13 @@ import sys
 import requests
 from pymongo import MongoClient
 
-# Config (match app.db.mongo)
+from app.config import settings
+
+# Paths and DB constants (match app.db.mongo)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 STIX_PATH = os.path.join(SCRIPT_DIR, "arifacts", "enterprise-attack-1.0.json")
 STIX_EDITED_PATH = os.path.join(SCRIPT_DIR, "arifacts", "enterprise-attack-1.0.json")
-BASE_URL = os.environ.get("MITRE_API_BASE", "http://localhost:8000")
-API_BASE = f"{BASE_URL}/api/mitre"
-MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://root:password@localhost:27017/?authSource=admin&directConnection=true")
+API_BASE = f"{settings.mitre_api_base}/api/mitre"
 DATABASE_NAME = "mitre_db"
 COLLECTIONS = ("current_schema", "mitre_entities", "mitre_documents")
 
@@ -32,7 +32,7 @@ FAILED = []
 
 def drop_collections() -> None:
     """Delete all MITRE collections so tests start from a clean state."""
-    client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+    client = MongoClient(settings.mongodb_uri, serverSelectionTimeoutMS=5000)
     try:
         db = client[DATABASE_NAME]
         for name in COLLECTIONS:

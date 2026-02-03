@@ -1,7 +1,7 @@
 """Neo4j storage for MITRE/STIX data. Syncs bundle objects as nodes and relationship objects as edges."""
-import os
-
 from neo4j import AsyncGraphDatabase
+
+from app.config import settings
 
 from app.schemas.mitre import MitreBundle, MitreObject
 
@@ -46,14 +46,15 @@ def _node_properties(obj: MitreObject) -> dict:
 async def init_neo4j() -> None:
     """Connect to Neo4j. Call once at app startup."""
     global _driver
-    uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
-    user = os.environ.get("NEO4J_USER", "neo4j")
-    password = os.environ.get("NEO4J_PASSWORD", "password123")
     try:
-        _driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
+        _driver = AsyncGraphDatabase.driver(
+            settings.neo4j_uri, auth=(settings.neo4j_user, settings.neo4j_password)
+        )
         await _driver.verify_connectivity()
-    except Exception:
+        print("Neo4j connected:", settings.neo4j_uri)
+    except Exception as e:
         _driver = None
+        print("Neo4j connection failed (MITRE graph storage will be skipped):", e)
 
 
 async def close_neo4j() -> None:
@@ -62,6 +63,7 @@ async def close_neo4j() -> None:
     if _driver is not None:
         await _driver.close()
         _driver = None
+        print("Neo4j connection closed")
 
 
 def _get_driver():
@@ -78,6 +80,7 @@ async def store_mitre_bundle(content: MitreBundle) -> None:
     """
     driver = _get_driver()
     if driver is None:
+        print("Neo4j not available, skipping graph sync")
         return
 
     # Id -> object for lookups
@@ -110,6 +113,8 @@ async def store_mitre_bundle(content: MitreBundle) -> None:
                 rel_type,
                 rel.id,
             )
+
+    print("Neo4j: stored", len(nodes), "nodes and", len(relationships), "relationships")
 
 
 async def _clear_mitre_graph(tx) -> None:
