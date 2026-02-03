@@ -2,6 +2,8 @@
 NiceGUI frontend for MITRE: mitre, chat, and graph pages.
 Chat page uses the backend /api/chat endpoint with local conversation history.
 """
+import asyncio
+import json
 import os
 import httpx
 from nicegui import ui
@@ -11,6 +13,13 @@ API_BASE = os.environ.get("API_BASE", "http://localhost:8000").rstrip("/")
 CHAT_API = f"{API_BASE}/api/chat/"
 SEARCH_API = f"{API_BASE}/api/search/"
 GRAPH_SVG_URL = f"{API_BASE}/api/graph/svg"
+MITRE_VERSION_URL = f"{API_BASE}/api/mitre/version"
+MITRE_VERSIONS_URL = f"{API_BASE}/api/mitre/versions"
+MITRE_CONTENT_URL = f"{API_BASE}/api/mitre/"
+
+
+def mitre_download_url(version: str) -> str:
+    return f"{API_BASE}/api/mitre/{version}/download"
 
 
 def add_nav():
@@ -30,9 +39,256 @@ def index():
 @ui.page("/mitre")
 def mitre_page():
     add_nav()
-    with ui.column().classes("w-full max-w-2xl mx-auto mt-8 gap-4"):
-        ui.label("MITRE").classes("text-2xl font-bold")
-        ui.label("Coming soon.").classes("text-gray-500")
+
+    latest_version: dict | None = None
+    versions_list: list[dict] = []
+
+    async def fetch_latest():
+        nonlocal latest_version
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(MITRE_VERSION_URL)
+            r.raise_for_status()
+            latest_version = r.json()
+            return latest_version.get("x_mitre_version")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                latest_version = None
+                return None
+            raise
+        except Exception:
+            latest_version = None
+            return None
+
+    async def fetch_versions():
+        nonlocal versions_list
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(MITRE_VERSIONS_URL)
+            r.raise_for_status()
+            data = r.json()
+            versions_list = data.get("versions", [])
+            return versions_list
+        except Exception:
+            versions_list = []
+            return []
+
+    async def refresh_all():
+        latest_label.set_visibility(False)
+        versions_container.set_visibility(False)
+        with version_slot:
+            version_slot.clear()
+            with version_slot:
+                ui.spinner("dots", size="sm")
+        try:
+            ver = await fetch_latest()
+            vers = await fetch_versions()
+        except Exception as e:
+            version_slot.clear()
+            with version_slot:
+                ui.label(f"Error loading version: {e}").classes("text-error")
+            return
+        version_slot.clear()
+        with version_slot:
+            if ver is not None:
+                latest_label.set_visibility(True)
+                latest_value.text = ver
+            else:
+                latest_label.set_visibility(True)
+                latest_value.text = "—"
+            _render_versions_table()
+            versions_container.set_visibility(True)
+
+    def _render_versions_table():
+        versions_table.clear()
+        with versions_table:
+            if not versions_list:
+                ui.label("No versions stored.").classes("text-gray-500")
+                return
+            for v in versions_list:
+                version = v.get("x_mitre_version", "")
+                meta = v.get("metadata") or {}
+                last_mod = (meta.get("last_modified") or "")[:19].replace("T", " ")
+                size_kb = (meta.get("size") or 0) / 1024
+                with ui.row().classes("w-full items-center gap-4 py-2 border-b border-gray-200 last:border-0"):
+                    ui.label(version).classes("font-mono font-medium w-24 shrink-0")
+                    ui.label(last_mod).classes("text-gray-600 text-sm flex-1")
+                    ui.label(f"{size_kb:.1f} KB").classes("text-gray-500 text-sm w-20 shrink-0")
+                    ui.link(
+                        "Download",
+                        mitre_download_url(version),
+                    ).classes("btn btn-sm btn-outline").props("no-caps target=_blank")
+
+    with ui.column().classes("w-full max-w-4xl mx-auto mt-6 gap-6 px-4"):
+        ui.label("MITRE datasets").classes("text-2xl font-bold")
+
+        # —— Latest version ——
+        with ui.card().classes("w-full"):
+            ui.label("Current version").classes("text-lg font-semibold")
+            version_slot = ui.column().classes("w-full gap-2")
+            with version_slot:
+                ui.spinner("dots", size="sm")
+            latest_label = ui.row().classes("items-center gap-2")
+            with latest_label:
+                ui.label("Latest:").classes("text-gray-600")
+                latest_value = ui.label("—").classes("font-mono font-medium")
+            latest_label.set_visibility(False)
+            async def on_refresh_click():
+                await refresh_all()
+                _sync_version_options()
+            ui.button("Refresh", on_click=on_refresh_click).props("flat rounded size=sm")
+
+        # —— Available versions ——
+        versions_container = ui.column().classes("w-full gap-2")
+        versions_container.set_visibility(False)
+        with versions_container:
+            ui.label("Available versions").classes("text-lg font-semibold")
+            versions_table = ui.column().classes("w-full")
+
+        # —— Update / Create ——
+        with ui.card().classes("w-full"):
+            ui.label("Update or create dataset").classes("text-lg font-semibold")
+            with ui.tabs().classes("w-full") as tabs:
+                update_tab = ui.tab("Update existing")
+                create_tab = ui.tab("Create new")
+            with ui.tab_panels(tabs, value=update_tab).classes("w-full"):
+                # Update panel
+                with ui.tab_panel(update_tab).classes("w-full"):
+                    update_version_select = ui.select(
+                        options=[],
+                        label="Version to update",
+                        value=None,
+                    ).classes("w-full").props("outlined dense")
+                    update_json_input = ui.textarea(
+                        label="MITRE bundle JSON (paste or upload file)",
+                        placeholder='{"type":"bundle","spec_version":"2.1","objects":[...]}',
+                    ).classes("w-full").props("outlined rows=8")
+                    update_file_upload = ui.upload(
+                        label="Or upload file",
+                        on_upload=lambda e: _on_file_upload(e, update_json_input),
+                    ).props("auto-upload")
+                    update_btn = ui.button("Update dataset", on_click=lambda: do_update(update_version_select, update_json_input, update_status))
+                    update_status = ui.label("").classes("text-sm mt-2")
+
+                # Create panel
+                with ui.tab_panel(create_tab).classes("w-full"):
+                    create_json_input = ui.textarea(
+                        label="MITRE bundle JSON (paste or upload file). Version is taken from spec_version.",
+                        placeholder='{"type":"bundle","spec_version":"14.1","objects":[...]}',
+                    ).classes("w-full").props("outlined rows=8")
+                    create_file_upload = ui.upload(
+                        label="Or upload file",
+                        on_upload=lambda e: _on_file_upload(e, create_json_input),
+                    ).props("auto-upload")
+                    create_btn = ui.button("Create dataset", on_click=lambda: do_create(create_json_input, create_status))
+                    create_status = ui.label("").classes("text-sm mt-2")
+
+    def _on_file_upload(e, target: ui.textarea):
+        for f in e.content:
+            try:
+                text = f.read().decode("utf-8")
+                target.value = text
+            except Exception:
+                pass
+
+    async def do_update(version_select: ui.select, json_input: ui.textarea, status: ui.label):
+        version = version_select.value
+        raw = (json_input.value or "").strip()
+        if not version:
+            status.set_text("Select a version to update.")
+            status.classes(replace="text-warning")
+            return
+        if not raw:
+            status.set_text("Paste or upload MITRE bundle JSON.")
+            status.classes(replace="text-warning")
+            return
+        try:
+            body = json.loads(raw)
+        except ValueError as err:
+            status.set_text(f"Invalid JSON: {err}")
+            status.classes(replace="text-error")
+            return
+        status.set_text("Updating…")
+        status.classes(replace="text-gray-600")
+        update_btn.set_enabled(False)
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                r = await client.put(f"{API_BASE}/api/mitre/{version}", json=body)
+            r.raise_for_status()
+            data = r.json()
+            status.set_text(f"Updated: {data.get('x_mitre_version', version)}")
+            status.classes(replace="text-positive")
+            await refresh_all()
+            _sync_version_options()
+        except httpx.HTTPStatusError as e:
+            status.set_text(f"Error {e.response.status_code}: {(e.response.text or '')[:200]}")
+            status.classes(replace="text-error")
+        except Exception as e:
+            status.set_text(f"Error: {e}")
+            status.classes(replace="text-error")
+        finally:
+            update_btn.set_enabled(True)
+
+    async def do_create(json_input: ui.textarea, status: ui.label):
+        raw = (json_input.value or "").strip()
+        if not raw:
+            status.set_text("Paste or upload MITRE bundle JSON.")
+            status.classes(replace="text-warning")
+            return
+        try:
+            body = json.loads(raw)
+        except ValueError as err:
+            status.set_text(f"Invalid JSON: {err}")
+            status.classes(replace="text-error")
+            return
+        version = body.get("spec_version") or body.get("x_mitre_version")
+        if not version:
+            status.set_text("Bundle must have spec_version (or x_mitre_version).")
+            status.classes(replace="text-warning")
+            return
+        status.set_text("Creating…")
+        status.classes(replace="text-gray-600")
+        create_btn.set_enabled(False)
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                r = await client.put(MITRE_CONTENT_URL, json=body)
+            r.raise_for_status()
+            data = r.json()
+            status.set_text(f"Created: {data.get('x_mitre_version', version)}")
+            status.classes(replace="text-positive")
+            await refresh_all()
+        except httpx.HTTPStatusError as e:
+            msg = (e.response.text or "")[:200]
+            if e.response.status_code == 409:
+                status.set_text(f"Version already exists. Use Update to replace. {msg}")
+            else:
+                status.set_text(f"Error {e.response.status_code}: {msg}")
+            status.classes(replace="text-error")
+        except Exception as e:
+            status.set_text(f"Error: {e}")
+            status.classes(replace="text-error")
+        finally:
+            create_btn.set_enabled(True)
+
+    # Populate version dropdown from versions list after first refresh
+    def _sync_version_options():
+        opts = [v.get("x_mitre_version") for v in versions_list]
+        update_version_select.set_options(opts if opts else [])
+        if opts and not update_version_select.value:
+            update_version_select.set_value(opts[0])
+
+    # Run initial load and sync version dropdown
+    async def _on_refresh():
+        await refresh_all()
+        _sync_version_options()
+
+    def _run_initial_refresh():
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_on_refresh())
+        except RuntimeError:
+            pass
+    ui.timer(0.1, _run_initial_refresh, once=True)
 
 
 @ui.page("/chat")

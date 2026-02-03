@@ -98,6 +98,29 @@ async def get_mitre_version() -> str | None:
         raise MitreDBError(f"Failed to get MITRE version: {e}") from e
 
 
+async def list_mitre_versions() -> list[dict]:
+    """
+    Return all available MITRE versions from mitre_documents.
+    Each item has x_mitre_version (_id) and metadata (MitreMetadata fields).
+    """
+    try:
+        collection = _get_db()[COLLECTION_DOCUMENTS]
+        cursor = collection.find(
+            {},
+            {"_id": 1, "metadata": 1},
+        ).sort("metadata.last_modified", -1)
+        docs = await cursor.to_list(length=None)
+        return [
+            {
+                "x_mitre_version": doc["_id"],
+                "metadata": doc.get("metadata", {}),
+            }
+            for doc in docs
+        ]
+    except PyMongoError as e:
+        raise MitreDBError(f"Failed to list MITRE versions: {e}") from e
+
+
 async def _entity_docs_with_embeddings(content: MitreBundle) -> list[dict]:
     """
     Build entity documents with embedding field for name+description.
@@ -127,6 +150,32 @@ async def get_mitre_content() -> tuple[MitreBundle, MitreMetadata] | None:
             return None
         collection = _get_db()[COLLECTION_DOCUMENTS]
         doc = await collection.find_one({"_id": version})
+        if doc is None:
+            return None
+        metadata = MitreMetadata(
+            x_mitre_version=doc["metadata"]["x_mitre_version"],
+            last_modified=doc["metadata"]["last_modified"],
+            size=doc["metadata"]["size"],
+            type=doc["metadata"]["type"],
+        )
+        content = MitreBundle(
+            type="bundle",
+            id=doc.get("bundle_id"),
+            spec_version=doc.get("spec_version", "2.1"),
+            objects=[MitreObject.model_validate(o) for o in doc["objects"]],
+        )
+        return (content, metadata)
+    except MitreDBError:
+        raise
+    except PyMongoError as e:
+        raise MitreDBError(f"Failed to get MITRE content: {e}") from e
+
+
+async def get_mitre_content_by_version(x_mitre_version: str) -> tuple[MitreBundle, MitreMetadata] | None:
+    """Return (content, metadata) for the given version, or None if not found."""
+    try:
+        collection = _get_db()[COLLECTION_DOCUMENTS]
+        doc = await collection.find_one({"_id": x_mitre_version})
         if doc is None:
             return None
         metadata = MitreMetadata(

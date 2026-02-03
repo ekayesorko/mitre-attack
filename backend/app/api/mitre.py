@@ -2,21 +2,25 @@
 MITRE API routes per assignment.md (Task 2).
 
 API list:
-- GET /api/mitre/version  → latest x_mitre_version (Subtask 1 & 4)
-- GET /api/mitre/         → retrieve MITRE content as JSON (Subtask 2 & 5)
+- GET /api/mitre/version   → latest x_mitre_version (Subtask 1 & 4)
+- GET /api/mitre/versions  → list all available MITRE data versions
+- GET /api/mitre/          → retrieve MITRE content as JSON (Subtask 2 & 5)
 - PUT /api/mitre/{x_mitre_version}  → replace MITRE for given version (Subtask 3)
 - PUT /api/mitre/         → create new MITRE entry (body: version + content) (Subtask 6)
 """
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 
 from app.db import (
     DuplicateVersionError,
     MitreDBError,
     get_mitre_content,
+    get_mitre_content_by_version,
     get_mitre_version,
     insert_mitre_document,
+    list_mitre_versions,
     put_mitre_document,
 )
 from app.schemas.mitre import (
@@ -24,7 +28,9 @@ from app.schemas.mitre import (
     MitreContentResponse,
     MitreMetadata,
     MitrePutResponse,
+    MitreVersionInfo,
     MitreVersionResponse,
+    MitreVersionsResponse,
 )
 
 router = APIRouter()
@@ -74,10 +80,30 @@ async def get_mitre_version_endpoint() -> MitreVersionResponse:
     return MitreVersionResponse(x_mitre_version=version)
 
 
+@router.get("/versions", response_model=MitreVersionsResponse)
+async def list_mitre_versions_endpoint() -> MitreVersionsResponse:
+    """
+    List all available MITRE data versions stored in the backend.
+    Returns version id and metadata for each; newest first by last_modified.
+    """
+    try:
+        raw = await list_mitre_versions()
+    except (MitreDBError, RuntimeError) as e:
+        _handle_db_error(e)
+    items = [
+        MitreVersionInfo(
+            x_mitre_version=v["x_mitre_version"],
+            metadata=MitreMetadata(**v["metadata"]),
+        )
+        for v in raw
+    ]
+    return MitreVersionsResponse(versions=items)
+
+
 @router.get("/", response_model=MitreContentResponse)
 async def get_mitre_content_endpoint() -> MitreContentResponse:
     """
-    **Subtask 2 & 5:** Download/retrieve MITRE entity content as JSON.
+    **Subtask 2 & 5:** Download/retrieve MITRE entity content as JSON (current version).
     Returns 404 if MITRE data is missing.
     """
     try:
@@ -94,6 +120,55 @@ async def get_mitre_content_endpoint() -> MitreContentResponse:
         x_mitre_version=metadata.x_mitre_version,
         content=content,
         metadata=metadata,
+    )
+
+
+@router.get("/{x_mitre_version}", response_model=MitreContentResponse)
+async def get_mitre_content_by_version_endpoint(x_mitre_version: str) -> MitreContentResponse:
+    """
+    Retrieve MITRE bundle content for a specific version (for download).
+    Returns 404 if that version does not exist.
+    """
+    try:
+        result = await get_mitre_content_by_version(x_mitre_version)
+    except (MitreDBError, RuntimeError) as e:
+        _handle_db_error(e)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"MITRE version '{x_mitre_version}' not found.",
+        )
+    content, metadata = result
+    return MitreContentResponse(
+        x_mitre_version=metadata.x_mitre_version,
+        content=content,
+        metadata=metadata,
+    )
+
+
+@router.get("/{x_mitre_version}/download")
+async def download_mitre_version_endpoint(x_mitre_version: str) -> Response:
+    """
+    Return MITRE bundle for the given version as a downloadable JSON file.
+    """
+    try:
+        result = await get_mitre_content_by_version(x_mitre_version)
+    except (MitreDBError, RuntimeError) as e:
+        _handle_db_error(e)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"MITRE version '{x_mitre_version}' not found.",
+        )
+    content, _ = result
+    body = content.model_dump_json(indent=2)
+    filename = f"mitre-{x_mitre_version}.json"
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
     )
 
 

@@ -17,6 +17,20 @@ class MitreMetadata(BaseModel):
     type: str = Field(default="application/json", description="MIME type")
 
 
+class MitreVersionInfo(BaseModel):
+    """Single version entry for GET /api/mitre/versions."""
+    x_mitre_version: str = Field(..., description="MITRE version identifier")
+    metadata: MitreMetadata = Field(..., description="Stored metadata for this version")
+
+
+class MitreVersionsResponse(BaseModel):
+    """List of available MITRE versions (GET /api/mitre/versions)."""
+    versions: list[MitreVersionInfo] = Field(
+        default_factory=list,
+        description="Available versions, newest first",
+    )
+
+
 class MitreExternalReference(BaseModel):
     """External reference for a MITRE/STIX object."""
     source_name: str = Field(..., description="Source identifier")
