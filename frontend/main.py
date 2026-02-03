@@ -166,7 +166,8 @@ def mitre_page():
                     update_file_upload = ui.upload(
                         label="Or upload file",
                         on_upload=lambda e: _on_file_upload(e, update_json_input),
-                    ).props("auto-upload")
+                    ).props("auto-upload accept=.json,application/json")
+                    # Handler must be async: NiceGUI passes e.file (FileUpload) with async .text()
                     update_btn = ui.button("Update dataset", on_click=lambda: do_update(update_version_select, update_json_input, update_status))
                     update_status = ui.label("").classes("text-sm mt-2")
 
@@ -179,17 +180,26 @@ def mitre_page():
                     create_file_upload = ui.upload(
                         label="Or upload file",
                         on_upload=lambda e: _on_file_upload(e, create_json_input),
-                    ).props("auto-upload")
+                    ).props("auto-upload accept=.json,application/json")
                     create_btn = ui.button("Create dataset", on_click=lambda: do_create(create_json_input, create_status))
                     create_status = ui.label("").classes("text-sm mt-2")
 
-    def _on_file_upload(e, target: ui.textarea):
-        for f in e.content:
-            try:
-                text = f.read().decode("utf-8")
-                target.value = text
-            except Exception:
-                pass
+    async def _on_file_upload(e, target: ui.textarea):
+        try:
+            # NiceGUI 2.14+: event has .file (FileUpload); .text() is async
+            file = getattr(e, "file", None) or getattr(e, "content", None)
+            if file is None:
+                return
+            if hasattr(file, "text"):
+                text = await file.text("utf-8")
+            elif hasattr(file, "read"):
+                data = await file.read()
+                text = data.decode("utf-8") if isinstance(data, bytes) else str(data)
+            else:
+                return
+            target.value = text
+        except Exception:
+            pass
 
     async def do_update(version_select: ui.select, json_input: ui.textarea, status: ui.label):
         version = version_select.value

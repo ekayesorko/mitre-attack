@@ -37,11 +37,13 @@ services:
 
   # FastAPI Backend
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: mitre-backend
     restart: unless-stopped
-    expose:
-      - "8000"
+    ports:
+      - "8000:8000"
     environment:
       # For Atlas Local / single-node replica set in Docker, use directConnection=true so the driver
       # does not try to connect to internal replica-set hostnames (e.g. container ID) that are not resolvable.
@@ -55,6 +57,22 @@ services:
     depends_on:
       - mongodb
       - neo4j
+    networks:
+      - mitre_network
+
+  # NiceGUI Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mitre-frontend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - API_BASE=http://backend:8000
+    depends_on:
+      - backend
     networks:
       - mitre_network
 

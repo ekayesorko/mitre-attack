@@ -1,12 +1,9 @@
 """Neo4j storage for MITRE/STIX data. Syncs bundle objects as nodes and relationship objects as edges."""
-import logging
 import os
 
 from neo4j import AsyncGraphDatabase
 
 from app.schemas.mitre import MitreBundle, MitreObject
-
-logger = logging.getLogger(__name__)
 
 _driver = None
 
@@ -55,10 +52,8 @@ async def init_neo4j() -> None:
     try:
         _driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
         await _driver.verify_connectivity()
-        logger.info("Neo4j connected: %s", uri)
-    except Exception as e:
+    except Exception:
         _driver = None
-        logger.warning("Neo4j connection failed (MITRE graph storage will be skipped): %s", e)
 
 
 async def close_neo4j() -> None:
@@ -67,7 +62,6 @@ async def close_neo4j() -> None:
     if _driver is not None:
         await _driver.close()
         _driver = None
-        logger.info("Neo4j connection closed")
 
 
 def _get_driver():
@@ -84,7 +78,6 @@ async def store_mitre_bundle(content: MitreBundle) -> None:
     """
     driver = _get_driver()
     if driver is None:
-        logger.debug("Neo4j not available, skipping graph sync")
         return
 
     # Id -> object for lookups
@@ -117,8 +110,6 @@ async def store_mitre_bundle(content: MitreBundle) -> None:
                 rel_type,
                 rel.id,
             )
-
-    logger.info("Neo4j: stored %d nodes and %d relationships", len(nodes), len(relationships))
 
 
 async def _clear_mitre_graph(tx) -> None:

@@ -7,13 +7,10 @@
 Vector search uses MongoDB Atlas $vectorSearch (requires a vector search index on mitre_entities.embedding).
 Set VECTOR_SEARCH_INDEX_NAME to match your Atlas index (default: mitre_entities_vector).
 """
-import logging
 import os
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import DuplicateKeyError, PyMongoError
-
-logger = logging.getLogger(__name__)
 
 from app.db.neo4j import store_mitre_bundle
 from app.schemas.mitre import MitreBundle, MitreMetadata, MitreObject
