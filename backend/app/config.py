@@ -30,6 +30,7 @@ class Settings:
         load_dotenv()
         # MongoDB
         self.mongodb_uri = _required("MONGODB_URI")
+        print(self.mongodb_uri)
         self.vector_search_index_name = _required("VECTOR_SEARCH_INDEX_NAME")
 
         # Neo4j
