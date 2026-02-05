@@ -6,8 +6,6 @@ services:
     image: mongodb/mongodb-atlas-local:8.0.3
     container_name: mitre-mongodb
     restart: unless-stopped
-    ports:
-      - "27017:27017"
     environment:
       MONGODB_INITDB_ROOT_USERNAME: root
       MONGODB_INITDB_ROOT_PASSWORD: password
@@ -22,9 +20,6 @@ services:
     image: neo4j:latest
     container_name: mitre-neo4j
     restart: unless-stopped
-    ports:
-      - "7474:7474"  # HTTP
-      - "7687:7687"  # Bolt
     environment:
       NEO4J_AUTH: neo4j/password123
       NEO4J_apoc_export_file_enabled: "true"
@@ -42,10 +37,14 @@ services:
       dockerfile: Dockerfile
     container_name: mitre-ollama
     restart: unless-stopped
-    ports:
-      - "11434:11434"
     volumes:
       - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list | grep -q gemma3:4b && ollama list | grep -q nomic-embed-text"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     networks:
       - mitre_network
 
@@ -56,8 +55,6 @@ services:
       dockerfile: Dockerfile
     container_name: mitre-backend
     restart: unless-stopped
-    ports:
-      - "8000:8000"
     environment:
       - MONGODB_URI=mongodb://root:password@mongodb:27017/?authSource=admin&directConnection=true
       - NEO4J_URI=bolt://neo4j:7687
