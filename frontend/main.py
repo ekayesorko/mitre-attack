@@ -52,7 +52,7 @@ def mitre_page():
         nonlocal versions_list
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                r = await client.get(settings.mitre_versions_url)
+                r = await client.get(settings.mitre_list_url)
             r.raise_for_status()
             data = r.json()
             versions_list = data.get("versions", [])

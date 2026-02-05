@@ -203,7 +203,6 @@ async def _ensure_vector_search_index() -> None:
     """
     Create the vector search index on mitre_entities if missing.
     Only succeeds on MongoDB Atlas (createSearchIndexes is Atlas-only).
-    On local MongoDB we log and continue; search_entities_by_embedding will use the in-app fallback.
     """
     try:
         res = await _get_db().command(
@@ -232,7 +231,7 @@ async def _ensure_vector_search_index() -> None:
         elif res.get("ok") == 1:
             print("Vector search index already exists or creation skipped")
     except PyMongoError as e:
-        print("Could not create vector search index (use Atlas or rely on in-app fallback):", e)
+        print("Could not create vector search index", e)
 
 
 async def search_entities_by_embedding(
@@ -361,17 +360,12 @@ async def insert_mitre_document(
     content: MitreBundle,
     metadata: MitreMetadata,
 ) -> None:
-    """
-    Create a new MITRE document (POST-like). Fails with DuplicateVersionError
-    if a document for this x_mitre_version already exists.
-    """
     db = _get_db()
     docs_collection = db[COLLECTION_DOCUMENTS]
     entities_collection = db[COLLECTION_LATEST_ENTITIES]
     schema_collection = db[COLLECTION_CURRENT_SCHEMA]
 
     try:
-        # 1. Insert new MITRE document by version (no replace)
         doc = {
             "_id": x_mitre_version,
             "metadata": metadata.model_dump(mode="json"),

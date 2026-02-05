@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from graphviz import Digraph
 
-from app.db.neo4j import get_adjacent, get_uses_into_records
+from app.db.neo4j import get_uses_into_records
 
 router = APIRouter()
 
@@ -56,24 +56,6 @@ def _build_svg_bytes(records: list[dict]) -> bytes:
         rel_label = getattr(r, "type", "USES")
         dot.edge(a_id, b_id, label=rel_label)
     return dot.pipe(format="svg")
-
-
-@router.get("/adjacent")
-async def get_adjacent_endpoint(stix_id: str) -> dict:
-    """
-    Return the node for the given stix_id and all adjacent nodes with their relationship.
-
-    Response:
-    - **node**: the center node (properties)
-    - **adjacent**: list of { relationship: { type, stix_id, ... }, direction: "outgoing"|"incoming", node: {...} }
-    """
-    result = await get_adjacent(stix_id)
-    if result is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No node found with stix_id '{stix_id}' or Neo4j is unavailable.",
-        )
-    return result
 
 
 @router.get("/svg")

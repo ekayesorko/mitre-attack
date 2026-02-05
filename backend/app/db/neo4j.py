@@ -137,60 +137,6 @@ async def _create_relationship(tx, source_ref: str, target_ref: str, rel_type: s
     await tx.run(cypher, source_ref=source_ref, target_ref=target_ref, rel_id=rel_id)
 
 
-# Cypher: node by stix_id and all adjacent nodes with their relationship
-_ADJACENT_CYPHER = """
-MATCH (n:MitreEntity {stix_id: $stix_id})
-OPTIONAL MATCH (n)-[r]-(other:MitreEntity)
-WHERE other.stix_id <> n.stix_id
-RETURN properties(n) AS center,
-       type(r) AS rel_type,
-       properties(r) AS rel_props,
-       properties(other) AS neighbor,
-       startNode(r).stix_id = $stix_id AS from_center
-"""
-
-
-async def get_adjacent(stix_id: str) -> dict | None:
-    """
-    Return the node for stix_id and all adjacent nodes with their relationship.
-    Shape: { "node": {...}, "adjacent": [ { "relationship": { "type", "stix_id", ... }, "direction": "outgoing"|"incoming", "node": {...} }, ... ] }
-    Returns None if node not found or Neo4j unavailable.
-    """
-    driver = _get_driver()
-    if driver is None:
-        return None
-
-    async with driver.session() as session:
-        result = await session.run(_ADJACENT_CYPHER, stix_id=stix_id)
-        records = await result.data()
-
-    if not records:
-        return None
-
-    # First row has center (same for all rows); rows with no relationship have rel_type/rel_props/neighbor/from_center as None
-    center = records[0].get("center")
-    if not center:
-        return None
-
-    adjacent: list[dict] = []
-    for rec in records:
-        rel_type = rec.get("rel_type")
-        if rel_type is None:
-            continue
-        rel_props = rec.get("rel_props") or {}
-        neighbor = rec.get("neighbor")
-        from_center = rec.get("from_center", False)
-        if neighbor is None:
-            continue
-        adjacent.append({
-            "relationship": {"type": rel_type, **rel_props},
-            "direction": "outgoing" if from_center else "incoming",
-            "node": neighbor,
-        })
-
-    return {"node": center, "adjacent": adjacent}
-
-
 # Cypher: (a)-[r:USES]->(b) where b has the given stix_id; returns raw a, r, b for graphviz
 #make it bidirectional
 _USES_INTO_CYPHER = """

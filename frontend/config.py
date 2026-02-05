@@ -5,6 +5,8 @@ Raises RuntimeError if any required variable is missing.
 """
 import os
 
+from dotenv import load_dotenv
+
 
 def _required(key: str) -> str:
     value = os.environ.get(key)
@@ -17,13 +19,14 @@ class Settings:
     """All environment-derived configuration. Loaded once at import. No defaults."""
 
     def __init__(self) -> None:
+        load_dotenv()
         base = _required("API_BASE").rstrip("/")
         self.api_base = base
         self.chat_api = f"{base}/api/chat/"
         self.search_api = f"{base}/api/search/"
         self.graph_svg_url = f"{base}/api/graph/svg"
-        self.mitre_version_url = f"{base}/api/mitre/version"
-        self.mitre_versions_url = f"{base}/api/mitre/versions"
+        self.mitre_version_url = f"{base}/api/mitre/latest-version"
+        self.mitre_list_url = f"{base}/api/mitre/list"
         self.mitre_content_url = f"{base}/api/mitre/"
 
     def mitre_download_url(self, version: str) -> str:

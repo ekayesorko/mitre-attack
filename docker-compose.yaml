@@ -35,6 +35,20 @@ services:
     networks:
       - mitre_network
 
+  # Ollama - LLM server (OpenAI-compatible API), preloads gemma3:4b and nomic-embed-text
+  ollama:
+    build:
+      context: ./ollama
+      dockerfile: Dockerfile
+    container_name: mitre-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - mitre_network
+
   # FastAPI Backend
   backend:
     build:
@@ -45,18 +59,21 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # For Atlas Local / single-node replica set in Docker, use directConnection=true so the driver
-      # does not try to connect to internal replica-set hostnames (e.g. container ID) that are not resolvable.
       - MONGODB_URI=mongodb://root:password@mongodb:27017/?authSource=admin&directConnection=true
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=password123
-      - LM_STUDIO_URI=http://lm-studio:1234/v1
-      - CHAT_MODEL=google/gemma-3-4b
+      - VECTOR_SEARCH_INDEX_NAME=mitre_entities_vector
+      - LM_STUDIO_URI=http://ollama:11434/v1
+      - LM_STUDIO_API_KEY=ollama
+      - CHAT_MODEL=gemma3:4b
       - EMBEDDING_MODEL=nomic-embed-text
+      - RAG_TOP_K=5
+      - MITRE_API_BASE=http://backend:8000
     depends_on:
       - mongodb
       - neo4j
+      - ollama
     networks:
       - mitre_network
 
@@ -95,8 +112,7 @@ volumes:
   mongodb_config:
   neo4j_data:
   neo4j_logs:
-  # lm_studio_models:
-  # lm_studio_config:
+  ollama_models:
 
 networks:
   mitre_network:
