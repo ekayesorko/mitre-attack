@@ -53,27 +53,14 @@ def _handle_db_error(exc: Exception) -> None:
         detail="An unexpected error occurred",
     ) from exc
 
-
-@router.get("/latest-version", response_model=MitreVersionResponse)
-async def get_mitre_version_endpoint() -> MitreVersionResponse:
-    """
-    return the latest x_mitre_version stored in the backend.
-    """
-    try:
-        version = await get_mitre_version()
-    except (MitreDBError, RuntimeError) as e:
-        _handle_db_error(e)
-    if version is None:
-        raise HTTPException(status_code=404, detail="No MITRE data loaded yet")
-    return MitreVersionResponse(x_mitre_version=version)
-
-
+## extra endpoint
 @router.get("/list", response_model=MitreVersionsResponse)
 async def list_mitre_versions_endpoint() -> MitreVersionsResponse:
     """
     List all available MITRE data versions stored in the backend.
     Returns version id and metadata for each; newest first by last_modified.
     """
+    print("list_mitre_versions_endpoint")
     try:
         raw = await list_mitre_versions()
     except (MitreDBError, RuntimeError) as e:
@@ -87,7 +74,22 @@ async def list_mitre_versions_endpoint() -> MitreVersionsResponse:
     ]
     return MitreVersionsResponse(versions=items)
 
+#subtask 2.1, 2.4
+@router.get("/version", response_model=MitreVersionResponse)
+async def get_mitre_version_endpoint() -> MitreVersionResponse:
+    """
+    return the latest x_mitre_version stored in the backend.
+    """
+    try:
+        version = await get_mitre_version()
+    except (MitreDBError, RuntimeError) as e:
+        _handle_db_error(e)
+    if version is None:
+        raise HTTPException(status_code=404, detail="No MITRE data loaded yet")
+    return MitreVersionResponse(x_mitre_version=version)
 
+
+##2.2 2.5
 @router.get("/{x_mitre_version}")
 async def download_mitre_version_endpoint(x_mitre_version: str) -> Response:
     """
@@ -113,7 +115,7 @@ async def download_mitre_version_endpoint(x_mitre_version: str) -> Response:
         },
     )
 
-
+##subtask 2.3
 @router.put("/{x_mitre_version}", response_model=MitrePutResponse)
 async def put_mitre_by_version(x_mitre_version: str, body: MitreBundle) -> MitrePutResponse:
     """
@@ -131,6 +133,9 @@ async def put_mitre_by_version(x_mitre_version: str, body: MitreBundle) -> Mitre
     )
 
 
+
+
+## subtask 2.6
 @router.put("/", response_model=MitrePutResponse, status_code=201)
 async def put_mitre(body: MitreBundle) -> MitrePutResponse:
     """
@@ -158,3 +163,5 @@ async def put_mitre(body: MitreBundle) -> MitrePutResponse:
         x_mitre_version=x_mitre_version,
         message="MITRE entry created successfully.",
     )
+
+

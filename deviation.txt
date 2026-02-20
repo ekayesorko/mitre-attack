@@ -1,0 +1,5 @@
+1. Subtask 2 and 5 are same. In subtask 5 it requires a specific mitre data for download. But in api path
+there is no version parameter. So adding a version as an pathparameter. 'GET /api/mitre/' becomes 
+'api/mitre/{x_mitre_version}'
+
+2. 

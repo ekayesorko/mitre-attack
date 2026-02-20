@@ -1,0 +1,2 @@
+1. latest version api naming changed to /version instead of /latest-version
+2. 

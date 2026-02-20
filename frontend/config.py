@@ -25,7 +25,7 @@ class Settings:
         self.chat_api = f"{base}/api/chat/"
         self.search_api = f"{base}/api/search/"
         self.graph_svg_url = f"{base}/api/graph/svg"
-        self.mitre_version_url = f"{base}/api/mitre/latest-version"
+        self.mitre_version_url = f"{base}/api/mitre/version"
         self.mitre_list_url = f"{base}/api/mitre/list"
         self.mitre_content_url = f"{base}/api/mitre/"
 
