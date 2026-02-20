@@ -6,7 +6,9 @@ from langchain_openai import ChatOpenAI
 
 from app.config import settings
 from app.services.rag import get_relevant_mitre_context
+import logging
 
+logger = logging.getLogger(__name__)
 
 def _to_langchain_message(m: dict) -> HumanMessage | AIMessage | SystemMessage:
     role = (m.get("role") or "user").strip().lower()
@@ -39,7 +41,7 @@ async def chat(
         try:
             rag_context = await get_relevant_mitre_context(last_user_content, top_k=settings.rag_top_k)
         except Exception as e:
-            print("Chat: RAG context retrieval failed, continuing without context:", e)
+            logger.error("Chat: RAG context retrieval failed, continuing without context:", e)
 
     # Build system block: optional user system + RAG context
     system_parts = []
@@ -72,7 +74,7 @@ async def chat(
     try:
         response = await llm.ainvoke(lc_messages)
     except Exception as e:
-        print("Chat: LLM invocation failed")
+        logger.error("Chat: LLM invocation failed")
         raise RuntimeError(f"LLM unavailable (is LM Studio running?): {e}") from e
 
     reply = (response.content or "").strip() if hasattr(response, "content") else ""
