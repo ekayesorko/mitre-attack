@@ -60,7 +60,6 @@ async def list_mitre_versions_endpoint() -> MitreVersionsResponse:
     List all available MITRE data versions stored in the backend.
     Returns version id and metadata for each; newest first by last_modified.
     """
-    print("list_mitre_versions_endpoint")
     try:
         raw = await list_mitre_versions()
     except (MitreDBError, RuntimeError) as e:

@@ -7,6 +7,7 @@
 Vector search uses MongoDB Atlas $vectorSearch (requires a vector search index on mitre_entities.embedding).
 Set VECTOR_SEARCH_INDEX_NAME to match your Atlas index (default: mitre_entities_vector).
 """
+import logging
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
@@ -15,7 +16,7 @@ from app.db.neo4j import store_mitre_bundle
 from app.schemas.mitre import MitreBundle, MitreMetadata, MitreObject
 from app.services.embeddings import _name_description_text, embed_texts_batch
 
-
+logger = logging.getLogger(__name__)
 class MitreDBError(Exception):
     """Raised when a MongoDB operation fails (connection, timeout, or write error)."""
     pass
@@ -227,11 +228,11 @@ async def _ensure_vector_search_index() -> None:
             }
         )
         if res.get("ok") == 1 and res.get("indexesCreated"):
-            print("Vector search index created:", [x.get("name") for x in res["indexesCreated"]])
+            logger.info("Vector search index created:")
         elif res.get("ok") == 1:
-            print("Vector search index already exists or creation skipped")
+            logger.info("Vector search index already exists or creation skipped")
     except PyMongoError as e:
-        print("Could not create vector search index", e)
+        logger.error("Could not create vector search index", e)
 
 
 async def search_entities_by_embedding(
@@ -350,7 +351,7 @@ async def put_mitre_document(
         try:
             await store_mitre_bundle(content)
         except Exception as e:
-            print("Neo4j sync failed after put_mitre_document:", e)
+            logger.error("Neo4j sync failed after put_mitre_document:", e)
     except PyMongoError as e:
         raise MitreDBError(f"Failed to store MITRE document: {e}") from e
 
@@ -398,6 +399,6 @@ async def insert_mitre_document(
         try:
             await store_mitre_bundle(content)
         except Exception as e:
-            print("Neo4j sync failed after insert_mitre_document:", e)
+            logger.error("Neo4j sync failed after insert_mitre_document:", e)
     except PyMongoError as e:
         raise MitreDBError(f"Failed to store MITRE document: {e}") from e

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from app.db.mongo import MitreDBError, search_entities_by_embedding
 from app.services.embeddings import embed_text
+import logging
 
+logger = logging.getLogger(__name__)
 
 def _format_entity(d: dict) -> str:
     """Format a single entity for context (name, type, description)."""
@@ -44,8 +46,8 @@ async def get_relevant_mitre_context(query: str, top_k: int = 5) -> str:
         entities = await search_entities_by_embedding(embedding, top_k=top_k)
         return format_entities_as_context(entities)
     except MitreDBError as e:
-        print("RAG: MongoDB/vector search failed, continuing without context:", e)
+        logger.error("RAG: MongoDB/vector search failed, continuing without context:", e)
         return ""
     except Exception as e:
-        print("RAG: embedding or retrieval failed, continuing without context:", e)
+        logger.error("RAG: embedding or retrieval failed, continuing without context:", e)
         return ""

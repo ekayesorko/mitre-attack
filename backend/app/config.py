@@ -3,6 +3,7 @@ Application settings loaded from environment variables at startup.
 Import `settings` and use it instead of reading os.environ elsewhere.
 Raises RuntimeError if any required variable is missing.
 """
+import logging
 import os
 
 from dotenv import load_dotenv
@@ -30,7 +31,6 @@ class Settings:
         load_dotenv()
         # MongoDB
         self.mongodb_uri = _required("MONGODB_URI")
-        print(self.mongodb_uri)
         self.vector_search_index_name = _required("VECTOR_SEARCH_INDEX_NAME")
 
         # Neo4j
@@ -50,6 +50,7 @@ class Settings:
 
         # Test / external API base (e.g. for test_mitre.py)
         self.mitre_api_base = _required("MITRE_API_BASE").rstrip("/")
+        self.log_level = logging.getLevelName(os.environ.get("LOG_LEVEL", "INFO"))
 
 
 # Single instance loaded at import
