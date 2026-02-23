@@ -89,52 +89,71 @@ async def store_mitre_bundle(content: MitreBundle) -> None:
     nodes = [o for o in content.objects if o.type != "relationship"]
     relationships = [o for o in content.objects if o.type == "relationship"]
 
+    # Group nodes by label for batch UNWIND (one tx per label)
+    nodes_by_label: dict[str, list[dict]] = {}
+    for obj in nodes:
+        label = _stix_type_to_label(obj.type)
+        nodes_by_label.setdefault(label, []).append(_node_properties(obj))
+
+    # Build list of relationship rows (source_ref, target_ref, rel_type, rel_id)
+    rel_rows: list[dict] = []
+    for rel in relationships:
+        if not rel.source_ref or not rel.target_ref or not rel.relationship_type:
+            continue
+        if rel.source_ref not in by_id or rel.target_ref not in by_id:
+            continue
+        rel_rows.append({
+            "source_ref": rel.source_ref,
+            "target_ref": rel.target_ref,
+            "rel_type": _relationship_type_to_neo4j(rel.relationship_type),
+            "rel_id": rel.id,
+        })
+
     async with driver.session() as session:
         # Clear existing MITRE nodes (and their relationships)
         await session.execute_write(_clear_mitre_graph)
 
-        # Create nodes
-        for obj in nodes:
-            label = _stix_type_to_label(obj.type)
-            props = _node_properties(obj)
-            await session.execute_write(_create_node, label, props)
+        # Batch create nodes: one UNWIND transaction per label
+        for label, rows in nodes_by_label.items():
+            await session.execute_write(_create_nodes_batch, label, rows)
 
-        # Create relationships
-        for rel in relationships:
-            if not rel.source_ref or not rel.target_ref or not rel.relationship_type:
-                continue
-            if rel.source_ref not in by_id or rel.target_ref not in by_id:
-                continue
-            rel_type = _relationship_type_to_neo4j(rel.relationship_type)
-            await session.execute_write(
-                _create_relationship,
-                rel.source_ref,
-                rel.target_ref,
-                rel_type,
-                rel.id,
-            )
+        # Batch create relationships: one UNWIND transaction per relationship type
+        rel_rows_by_type: dict[str, list[dict]] = {}
+        for row in rel_rows:
+            t = row["rel_type"].replace(" ", "_")
+            rel_rows_by_type.setdefault(t, []).append(row)
+        for rel_type, rows in rel_rows_by_type.items():
+            await session.execute_write(_create_relationships_batch, rel_type, rows)
 
-    logger.info("Neo4j: stored", len(nodes), "nodes and", len(relationships), "relationships")
+    logger.info("Neo4j: stored %s nodes and %s relationships", len(nodes), len(rel_rows))
 
 
 async def _clear_mitre_graph(tx) -> None:
     await tx.run("MATCH (n:MitreEntity) DETACH DELETE n")
 
 
-async def _create_node(tx, label: str, props: dict) -> None:
-    # Use MERGE on stix_id; then SET all properties. Label is from _stix_type_to_label (PascalCase).
-    cypher = f"MERGE (n:MitreEntity:{label} {{stix_id: $stix_id}}) SET n += $props"
-    await tx.run(cypher, stix_id=props["stix_id"], props=props)
+async def _create_nodes_batch(tx, label: str, rows: list[dict]) -> None:
+    """Create/merge nodes in one transaction using UNWIND. Label is from _stix_type_to_label (PascalCase)."""
+    if not rows:
+        return
+    cypher = (
+        f"UNWIND $rows AS row "
+        f"MERGE (n:MitreEntity:{label} {{stix_id: row.stix_id}}) SET n += row"
+    )
+    await tx.run(cypher, rows=rows)
 
 
-async def _create_relationship(tx, source_ref: str, target_ref: str, rel_type: str, rel_id: str) -> None:
-    # Sanitize rel_type for Cypher (no backticks in type name if already safe)
+async def _create_relationships_batch(tx, rel_type: str, rows: list[dict]) -> None:
+    """Merge relationships in one transaction using UNWIND. rel_type is already sanitized (UPPER_SNAKE)."""
+    if not rows:
+        return
     safe_type = rel_type.replace(" ", "_")
     cypher = (
-        "MATCH (a:MitreEntity {stix_id: $source_ref}), (b:MitreEntity {stix_id: $target_ref}) "
-        f"CREATE (a)-[r:{safe_type} {{stix_id: $rel_id}}]->(b)"
+        "UNWIND $rows AS row "
+        "MATCH (a:MitreEntity {stix_id: row.source_ref}), (b:MitreEntity {stix_id: row.target_ref}) "
+        f"MERGE (a)-[r:{safe_type} {{stix_id: row.rel_id}}]->(b)"
     )
-    await tx.run(cypher, source_ref=source_ref, target_ref=target_ref, rel_id=rel_id)
+    await tx.run(cypher, rows=rows)
 
 
 # Cypher: (a)-[r:USES]->(b) where b has the given stix_id; returns raw a, r, b for graphviz
