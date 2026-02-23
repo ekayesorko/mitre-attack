@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 _DELETE_BATCH_SIZE = 10_000
 # Batch size for chunked creates (UNWIND per chunk)
 _CREATE_BATCH_SIZE = 10_000
+# Max rows returned by graph/UI queries to avoid supernodes overwhelming the UI
+_GRAPH_QUERY_LIMIT = 500
 
 # Allowlist for dynamic Cypher identifiers (labels/types cannot be parameterized)
 _LABEL_PATTERN = re.compile(r"^[A-Za-z0-9]+$")  # PascalCase / alphanumeric
@@ -204,25 +206,34 @@ async def _create_relationships_batch(tx, rel_type: str, rows: list[dict]) -> No
     await tx.run(cypher, rows=rows)
 
 
-# Cypher: (a)-[r:USES]->(b) where b has the given stix_id; returns raw a, r, b for graphviz
-#make it bidirectional
+# Cypher: (a)-[r]->(b) where a or b has the given stix_id; returns raw a, r, b for graphviz. LIMIT caps supernodes.
 _USES_INTO_CYPHER = """
 MATCH (a)-[r]->(b)
 WHERE b.stix_id = $stix_id OR a.stix_id = $stix_id
 RETURN a, r, b
+LIMIT $limit
 """
-#make it bidirectional
 
-async def get_uses_into_records(stix_id: str) -> list[dict] | None:
+
+async def get_uses_into_records(
+    stix_id: str,
+    limit: int | None = None,
+) -> list[dict] | None:
     """
-    Return list of records { "a": Node, "r": Relationship, "b": Node } for (a)-[:USES]->(b) where b.stix_id = stix_id.
+    Return list of records { "a": Node, "r": Relationship, "b": Node } for edges incident to the given stix_id.
     For use with graphviz (raw Neo4j objects). Returns None if driver unavailable.
+    Result count is capped to avoid supernodes overwhelming the UI.
     """
     driver = _get_driver()
     if driver is None:
         return None
 
+    capped_limit = min(limit or _GRAPH_QUERY_LIMIT, _GRAPH_QUERY_LIMIT)
     async with driver.session() as session:
-        result = await session.run(_USES_INTO_CYPHER, stix_id=stix_id)
+        result = await session.run(
+            _USES_INTO_CYPHER,
+            stix_id=stix_id,
+            limit=capped_limit,
+        )
         records = [{"a": rec["a"], "r": rec["r"], "b": rec["b"]} async for rec in result]
     return records
