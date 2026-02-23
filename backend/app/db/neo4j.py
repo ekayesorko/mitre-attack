@@ -1,4 +1,5 @@
 """Neo4j storage for MITRE/STIX data. Syncs bundle objects as nodes and relationship objects as edges."""
+import re
 from neo4j import AsyncGraphDatabase
 import logging
 from app.config import settings
@@ -12,6 +13,24 @@ logger = logging.getLogger(__name__)
 _DELETE_BATCH_SIZE = 10_000
 # Batch size for chunked creates (UNWIND per chunk)
 _CREATE_BATCH_SIZE = 10_000
+
+# Allowlist for dynamic Cypher identifiers (labels/types cannot be parameterized)
+_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9]+$")  # PascalCase / alphanumeric
+_REL_TYPE_PATTERN = re.compile(r"^[A-Z0-9_]+$")  # UPPER_SNAKE
+
+
+def _validate_label(label: str) -> str:
+    """Allowlist: only alphanumeric label (PascalCase). Prevents Cypher injection."""
+    if not label or not _LABEL_PATTERN.fullmatch(label):
+        raise ValueError(f"Invalid Neo4j label (allowed: alphanumeric): {label!r}")
+    return label
+
+
+def _validate_relationship_type(rel_type: str) -> str:
+    """Allowlist: only UPPER_SNAKE relationship type. Prevents Cypher injection."""
+    if not rel_type or not _REL_TYPE_PATTERN.fullmatch(rel_type):
+        raise ValueError(f"Invalid Neo4j relationship type (allowed: A-Z, 0-9, _): {rel_type!r}")
+    return rel_type
 
 
 def _chunked[T](items: list[T], size: int) -> list[list[T]]:
@@ -161,25 +180,26 @@ async def _clear_mitre_graph(tx, batch_size: int = _DELETE_BATCH_SIZE) -> None:
 
 
 async def _create_nodes_batch(tx, label: str, rows: list[dict]) -> None:
-    """Create/merge nodes in one transaction using UNWIND. Label is from _stix_type_to_label (PascalCase)."""
+    """Create/merge nodes in one transaction using UNWIND. Label allowlist-validated (PascalCase)."""
     if not rows:
         return
+    label = _validate_label(label)
     cypher = (
-        f"UNWIND $rows AS row "
+        "UNWIND $rows AS row "
         f"MERGE (n:MitreEntity:{label} {{stix_id: row.stix_id}}) SET n += row"
     )
     await tx.run(cypher, rows=rows)
 
 
 async def _create_relationships_batch(tx, rel_type: str, rows: list[dict]) -> None:
-    """Merge relationships in one transaction using UNWIND. rel_type is already sanitized (UPPER_SNAKE)."""
+    """Merge relationships in one transaction using UNWIND. rel_type allowlist-validated (UPPER_SNAKE)."""
     if not rows:
         return
-    safe_type = rel_type.replace(" ", "_")
+    rel_type = _validate_relationship_type(rel_type)
     cypher = (
         "UNWIND $rows AS row "
         "MATCH (a:MitreEntity {stix_id: row.source_ref}), (b:MitreEntity {stix_id: row.target_ref}) "
-        f"MERGE (a)-[r:{safe_type} {{stix_id: row.rel_id}}]->(b)"
+        f"MERGE (a)-[r:{rel_type} {{stix_id: row.rel_id}}]->(b)"
     )
     await tx.run(cypher, rows=rows)
 
