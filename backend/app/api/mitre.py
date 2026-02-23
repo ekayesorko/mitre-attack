@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 
 from app.db import (
@@ -11,6 +11,8 @@ from app.db import (
     list_mitre_versions,
     put_mitre_document,
 )
+from app.dependencies import get_embedding_service
+from app.services.protocols import EmbeddingService
 from app.schemas.mitre import (
     MitreBundle,
     MitreContentResponse,
@@ -116,13 +118,19 @@ async def download_mitre_version_endpoint(x_mitre_version: str) -> Response:
 
 ##subtask 2.3
 @router.put("/{x_mitre_version}", response_model=MitrePutResponse)
-async def put_mitre_by_version(x_mitre_version: str, body: MitreBundle) -> MitrePutResponse:
+async def put_mitre_by_version(
+    x_mitre_version: str,
+    body: MitreBundle,
+    embedding_service: EmbeddingService = Depends(get_embedding_service),
+) -> MitrePutResponse:
     """
     User provides new MITRE file or content; validated and stored.
     """
     metadata = _make_metadata(x_mitre_version, body)
     try:
-        await put_mitre_document(x_mitre_version, body, metadata)
+        await put_mitre_document(
+            x_mitre_version, body, metadata, embedding_service.embed_texts_batch
+        )
     except (MitreDBError, RuntimeError) as e:
         _handle_db_error(e)
     return MitrePutResponse(
@@ -136,7 +144,10 @@ async def put_mitre_by_version(x_mitre_version: str, body: MitreBundle) -> Mitre
 
 ## subtask 2.6
 @router.put("/", response_model=MitrePutResponse, status_code=201)
-async def put_mitre(body: MitreBundle) -> MitrePutResponse:
+async def put_mitre(
+    body: MitreBundle,
+    embedding_service: EmbeddingService = Depends(get_embedding_service),
+) -> MitrePutResponse:
     """
     Accepts MITRE bundle as JSON; x_mitre_version is taken from the bundle's spec_version.
     Returns 409 if that version already exists.
@@ -149,7 +160,9 @@ async def put_mitre(body: MitreBundle) -> MitrePutResponse:
         )
     metadata = _make_metadata(x_mitre_version, body)
     try:
-        await insert_mitre_document(x_mitre_version, body, metadata)
+        await insert_mitre_document(
+            x_mitre_version, body, metadata, embedding_service.embed_texts_batch
+        )
     except DuplicateVersionError as e:
         raise HTTPException(
             status_code=409,

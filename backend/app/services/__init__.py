@@ -1,8 +1,4 @@
-"""Application services (embeddings, etc.)."""
-from app.services.embeddings import (
-    embed_name_and_description,
-    embed_text,
-    embed_texts_batch,
-)
+"""Application services (embeddings, RAG, chat, LLM)."""
+from app.services.embeddings import EmbeddingService
 
-__all__ = ["embed_text", "embed_name_and_description", "embed_texts_batch"]
+__all__ = ["EmbeddingService"]

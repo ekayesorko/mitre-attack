@@ -316,7 +316,10 @@ def chat_page():
                     reply_md = ui.markdown("...").classes("break-words")
 
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+        # Long timeout: RAG + LLM can take 1–2+ minutes
+            chat_timeout = httpx.Timeout(60.0, read=300.0)
+            print(f"Chat timeout: {messages[-1]['content']}")
+            async with httpx.AsyncClient(timeout=chat_timeout) as client:
                 r = await client.post(
                     settings.chat_api,
                     json={"messages": messages, "system": None},
@@ -324,6 +327,7 @@ def chat_page():
             r.raise_for_status()
             data = r.json()
             reply = data.get("reply", "")
+            print(f"Reply: {reply}")
             model = data.get("model", "")
             messages.append({"role": "assistant", "content": reply})
             spinner.set_visibility(False)

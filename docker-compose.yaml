@@ -1,10 +1,11 @@
 version: '3.8'
 
 services:
-  # MongoDB - NoSQL Database
+  # MongoDB - NoSQL Database (Atlas Local = single-node replica set)
   mongodb:
     image: mongodb/mongodb-atlas-local:8.0.3
     container_name: mitre-mongodb
+    hostname: mongodb  # Required for replica set to work; must match connection host
     restart: unless-stopped
     environment:
       MONGODB_INITDB_ROOT_USERNAME: root
@@ -12,6 +13,15 @@ services:
     volumes:
       - mongodb_data:/data/db
       - mongodb_config:/data/configdb
+      - mongodb_mongot:/data/mongot  # Atlas Search / Vector Search indexes
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh 'mongodb://root:password@localhost:27017/admin' --quiet --eval \"assert(db.adminCommand({ismaster:1}).ismaster)\" || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 90s
     networks:
       - mitre_network
 
@@ -27,6 +37,8 @@ services:
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
+    ports:
+      - "7687:7687"
     networks:
       - mitre_network
 
@@ -39,6 +51,8 @@ services:
     restart: unless-stopped
     volumes:
       - ollama_models:/root/.ollama
+    ports:
+      - "11434:11434"
     healthcheck:
       test: ["CMD-SHELL", "ollama list | grep -q gemma3:4b && ollama list | grep -q nomic-embed-text"]
       interval: 30s
@@ -56,7 +70,8 @@ services:
     container_name: mitre-backend
     restart: unless-stopped
     environment:
-      - MONGODB_URI=mongodb://root:password@mongodb:27017/?authSource=admin&directConnection=true
+      - PYTHONUNBUFFERED=1
+      - MONGODB_URI=mongodb://root:password@mongodb:27017/?authSource=admin&directConnection=true&retryWrites=true
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=password123
@@ -67,10 +82,15 @@ services:
       - EMBEDDING_MODEL=nomic-embed-text
       - RAG_TOP_K=5
       - MITRE_API_BASE=http://backend:8000
+    ports:
+      - "8000:8000"
     depends_on:
-      - mongodb
-      - neo4j
-      - ollama
+      mongodb:
+          condition: service_healthy
+      neo4j:
+          condition: service_started
+      ollama:
+          condition: service_started
     networks:
       - mitre_network
 
@@ -107,6 +127,7 @@ services:
 volumes:
   mongodb_data:
   mongodb_config:
+  mongodb_mongot:
   neo4j_data:
   neo4j_logs:
   ollama_models:
