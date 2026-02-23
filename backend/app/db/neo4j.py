@@ -53,6 +53,14 @@ def _node_properties(obj: MitreObject) -> dict:
     return out
 
 
+async def _ensure_stix_id_constraint(tx) -> None:
+    """Create unique constraint on MitreEntity.stix_id so MERGE/MATCH use index (O(1)) instead of full scan."""
+    await tx.run(
+        "CREATE CONSTRAINT mitre_entity_stix_id_unique IF NOT EXISTS "
+        "FOR (n:MitreEntity) REQUIRE n.stix_id IS UNIQUE"
+    )
+
+
 async def init_neo4j() -> None:
     """Connect to Neo4j. Call once at app startup."""
     global _driver
@@ -61,10 +69,12 @@ async def init_neo4j() -> None:
             settings.neo4j_uri, auth=(settings.neo4j_user, settings.neo4j_password)
         )
         await _driver.verify_connectivity()
-        logger.info("Neo4j connected:")
+        async with _driver.session() as session:
+            await session.execute_write(_ensure_stix_id_constraint)
+        logger.info("Neo4j connected")
     except Exception as e:
         _driver = None
-        logger.error("Neo4j connection failed (MITRE graph storage will be skipped):", e)
+        logger.error("Neo4j connection failed (MITRE graph storage will be skipped): %s", e)
 
 
 async def close_neo4j() -> None:
