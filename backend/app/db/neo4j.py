@@ -8,6 +8,16 @@ from app.schemas.mitre import MitreBundle, MitreObject
 _driver = None
 logger = logging.getLogger(__name__)
 
+# Batch size for chunked deletes (CALL { ... } IN TRANSACTIONS)
+_DELETE_BATCH_SIZE = 10_000
+# Batch size for chunked creates (UNWIND per chunk)
+_CREATE_BATCH_SIZE = 10_000
+
+
+def _chunked[T](items: list[T], size: int) -> list[list[T]]:
+    """Split list into chunks of at most `size`."""
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
 def _stix_type_to_label(stix_type: str) -> str:
     """Convert STIX type to a valid Neo4j label (PascalCase). E.g. 'attack-pattern' -> 'AttackPattern'."""
     if not stix_type:
@@ -113,23 +123,31 @@ async def store_mitre_bundle(content: MitreBundle) -> None:
         # Clear existing MITRE nodes (and their relationships)
         await session.execute_write(_clear_mitre_graph)
 
-        # Batch create nodes: one UNWIND transaction per label
+        # Batch create nodes: chunked UNWIND per label (multiple tx per label if large)
         for label, rows in nodes_by_label.items():
-            await session.execute_write(_create_nodes_batch, label, rows)
+            for chunk in _chunked(rows, _CREATE_BATCH_SIZE):
+                await session.execute_write(_create_nodes_batch, label, chunk)
 
-        # Batch create relationships: one UNWIND transaction per relationship type
+        # Batch create relationships: chunked UNWIND per type (multiple tx per type if large)
         rel_rows_by_type: dict[str, list[dict]] = {}
         for row in rel_rows:
             t = row["rel_type"].replace(" ", "_")
             rel_rows_by_type.setdefault(t, []).append(row)
         for rel_type, rows in rel_rows_by_type.items():
-            await session.execute_write(_create_relationships_batch, rel_type, rows)
+            for chunk in _chunked(rows, _CREATE_BATCH_SIZE):
+                await session.execute_write(_create_relationships_batch, rel_type, chunk)
 
     logger.info("Neo4j: stored %s nodes and %s relationships", len(nodes), len(rel_rows))
 
 
-async def _clear_mitre_graph(tx) -> None:
-    await tx.run("MATCH (n:MitreEntity) DETACH DELETE n")
+async def _clear_mitre_graph(tx, batch_size: int = _DELETE_BATCH_SIZE) -> None:
+    """Delete all MitreEntity nodes and their relationships in batched transactions."""
+    # Stream nodes and delete in chunks to avoid a single huge transaction
+    cypher = (
+        "MATCH (n:MitreEntity) "
+        "CALL { WITH n DETACH DELETE n RETURN 1 AS _ } IN TRANSACTIONS OF $batch_size ROWS"
+    )
+    await tx.run(cypher, batch_size=batch_size)
 
 
 async def _create_nodes_batch(tx, label: str, rows: list[dict]) -> None:
