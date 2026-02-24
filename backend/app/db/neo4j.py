@@ -1,9 +1,37 @@
 """Neo4j storage for MITRE/STIX data. Syncs bundle objects as nodes and relationship objects as edges."""
-from neo4j import AsyncGraphDatabase
-import logging
-from app.config import settings
+from __future__ import annotations
 
+import logging
+from dataclasses import dataclass
+from typing import Union
+
+from neo4j import AsyncGraphDatabase
+from neo4j.graph import Node, Relationship
+
+from app.config import settings
 from app.schemas.mitre import MitreBundle, MitreObject
+
+# Typed node property values for Neo4j (scalars and list of strings only).
+NodePropValue = Union[str, int, float, bool, list[str]]
+
+
+@dataclass(frozen=True)
+class NodeProperties:
+    """Flat properties for a Neo4j node. Must include 'stix_id'. Used for MERGE/SET."""
+
+    data: dict[str, NodePropValue]
+
+    def to_cypher_dict(self) -> dict[str, NodePropValue]:
+        return dict(self.data)
+
+
+@dataclass
+class UsesRecord:
+    """Single (a)-[r]->(b) record from a USES-style query. For use with graphviz."""
+
+    a: Node
+    r: Relationship
+    b: Node
 
 _driver = None
 logger = logging.getLogger(__name__)
@@ -23,10 +51,10 @@ def _relationship_type_to_neo4j(rel_type: str) -> str:
     return rel_type.upper().replace("-", "_")
 
 
-def _node_properties(obj: MitreObject) -> dict:
-    """Build a flat property dict for a node (scalars and list of strings only)."""
+def _node_properties(obj: MitreObject) -> NodeProperties:
+    """Build a flat property container for a node (scalars and list of strings only)."""
     d = obj.model_dump(mode="json")
-    out = {}
+    out: dict[str, NodePropValue] = {}
     for k, v in d.items():
         if k in ("relationship_type", "source_ref", "target_ref", "start_time", "stop_time"):
             continue
@@ -40,7 +68,7 @@ def _node_properties(obj: MitreObject) -> dict:
             continue
         # Skip nested objects (external_references, kill_chain_phases, etc.) for simplicity
     out["stix_id"] = d["id"]
-    return out
+    return NodeProperties(data=out)
 
 
 async def init_neo4j() -> None:
@@ -96,8 +124,8 @@ async def store_mitre_bundle(content: MitreBundle) -> None:
         # Create nodes
         for obj in nodes:
             label = _stix_type_to_label(obj.type)
-            props = _node_properties(obj)
-            await session.execute_write(_create_node, label, props)
+            node_props = _node_properties(obj)
+            await session.execute_write(_create_node, label, node_props)
 
         # Create relationships
         for rel in relationships:
@@ -114,15 +142,16 @@ async def store_mitre_bundle(content: MitreBundle) -> None:
                 rel.id,
             )
 
-    logger.info("Neo4j: stored", len(nodes), "nodes and", len(relationships), "relationships")
+    logger.info("Neo4j: stored %s nodes and %s relationships", len(nodes), len(relationships))
 
 
 async def _clear_mitre_graph(tx) -> None:
     await tx.run("MATCH (n:MitreEntity) DETACH DELETE n")
 
 
-async def _create_node(tx, label: str, props: dict) -> None:
+async def _create_node(tx, label: str, node_props: NodeProperties) -> None:
     # Use MERGE on stix_id; then SET all properties. Label is from _stix_type_to_label (PascalCase).
+    props = node_props.to_cypher_dict()
     cypher = f"MERGE (n:MitreEntity:{label} {{stix_id: $stix_id}}) SET n += $props"
     await tx.run(cypher, stix_id=props["stix_id"], props=props)
 
@@ -138,17 +167,15 @@ async def _create_relationship(tx, source_ref: str, target_ref: str, rel_type: s
 
 
 # Cypher: (a)-[r:USES]->(b) where b has the given stix_id; returns raw a, r, b for graphviz
-#make it bidirectional
 _USES_INTO_CYPHER = """
 MATCH (a)-[r]->(b)
 WHERE b.stix_id = $stix_id OR a.stix_id = $stix_id
 RETURN a, r, b
 """
-#make it bidirectional
 
-async def get_uses_into_records(stix_id: str) -> list[dict] | None:
+async def get_uses_into_records(stix_id: str) -> list[UsesRecord] | None:
     """
-    Return list of records { "a": Node, "r": Relationship, "b": Node } for (a)-[:USES]->(b) where b.stix_id = stix_id.
+    Return list of (a)-[r]->(b) records for queries where b.stix_id = stix_id or a.stix_id = stix_id.
     For use with graphviz (raw Neo4j objects). Returns None if driver unavailable.
     """
     driver = _get_driver()
@@ -157,5 +184,7 @@ async def get_uses_into_records(stix_id: str) -> list[dict] | None:
 
     async with driver.session() as session:
         result = await session.run(_USES_INTO_CYPHER, stix_id=stix_id)
-        records = [{"a": rec["a"], "r": rec["r"], "b": rec["b"]} async for rec in result]
+        records = [
+            UsesRecord(a=rec["a"], r=rec["r"], b=rec["b"]) async for rec in result
+        ]
     return records

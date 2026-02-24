@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from graphviz import Digraph
 
-from app.db.neo4j import get_uses_into_records
+from app.db.neo4j import UsesRecord, get_uses_into_records
 
 router = APIRouter()
 
@@ -35,16 +35,14 @@ def _node_label(node) -> str:
     return "Unknown"
 
 
-def _build_svg_bytes(records: list[dict]) -> bytes:
+def _build_svg_bytes(records: list[UsesRecord]) -> bytes:
     """Build a Digraph from (a)-[r:USES]->(b) records and return SVG bytes."""
     dot = Digraph("MITRE", format="svg")
     dot.attr(rankdir="LR", splines="true", nodesep="0.6", ranksep="1.2")
     dot.attr("edge", fontsize="10", labeldistance="1.5")
     seen_nodes = set()
     for rec in records:
-        a, b, r = rec.get("a"), rec.get("b"), rec.get("r")
-        if a is None or b is None or r is None:
-            continue
+        a, b, r = rec.a, rec.b, rec.r
         a_id = _node_id(a)
         b_id = _node_id(b)
         if a_id not in seen_nodes:
