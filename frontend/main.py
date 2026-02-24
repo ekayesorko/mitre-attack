@@ -319,7 +319,7 @@ def chat_page():
             async with httpx.AsyncClient(timeout=60.0) as client:
                 r = await client.post(
                     settings.chat_api,
-                    json={"messages": messages, "system": None},
+                    json={"messages": messages},
                 )
             r.raise_for_status()
             data = r.json()

@@ -14,16 +14,12 @@ class ChatMessage(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    """Multi-turn chat request: full conversation plus optional system prompt."""
+    """Multi-turn chat request: full conversation history."""
 
     messages: list[ChatMessage] = Field(
         ...,
         min_length=1,
         description="Conversation history. Last message should be from the user.",
-    )
-    system: str | None = Field(
-        None,
-        description="Optional system prompt (prepended before messages).",
     )
 
 
