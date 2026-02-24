@@ -15,6 +15,17 @@ async def chat_endpoint(body: ChatRequest) -> ChatResponse:
     Send `messages` (conversation history; last message should be from the user).
     Ensure LM Studio is running with the model loaded at LM_STUDIO_URI (default http://localhost:1234/v1).
     """
+    if not body.messages:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one message is required.",
+        )
+    last = body.messages[-1]
+    if last.role != "user":
+        raise HTTPException(
+            status_code=400,
+            detail="Last message must be from the user (role 'user').",
+        )
     try:
         messages = [
             ChatMessage(role=m.role, content=m.content)

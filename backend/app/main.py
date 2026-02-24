@@ -12,6 +12,7 @@ from pythonjsonlogger import jsonlogger
 from app.api import chat, graph, mitre, search
 from app.db import close_db, close_neo4j, init_db, init_neo4j
 from app.config import settings
+from app.exceptions import register_exception_handlers
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+register_exception_handlers(app)
 
 app.include_router(mitre.router, prefix="/api/mitre", tags=["mitre"])
 app.include_router(graph.router, prefix="/api/graph", tags=["graph"])

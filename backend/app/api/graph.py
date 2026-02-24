@@ -62,6 +62,12 @@ async def get_svg_endpoint(stix_id: str) -> Response:
     Return an SVG graph of (a)-[:USES]->(b) where b has the given stix_id.
     Nodes are entities that USE the given technique; the center node is the technique.
     """
+    stix_id = (stix_id or "").strip()
+    if not stix_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Query parameter 'stix_id' is required and must be non-empty.",
+        )
     records = await get_uses_into_records(stix_id)
     if records is None:
         raise HTTPException(

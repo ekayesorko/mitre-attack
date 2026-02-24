@@ -134,6 +134,11 @@ async def put_mitre(body: MitreBundle) -> MitrePutResponse:
     Accepts MITRE bundle as JSON; x_mitre_version is taken from the bundle's spec_version.
     Returns 409 if that version already exists.
     """
+    if not body.objects:
+        raise HTTPException(
+            status_code=400,
+            detail="Bundle must contain at least one object.",
+        )
     x_mitre_version = body.objects[0].x_mitre_version
     if x_mitre_version is None:
         raise HTTPException(
