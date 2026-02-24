@@ -412,6 +412,7 @@ def graph_page():
                 r = await client.get(settings.search_api, params={"q": q, "top_k": 10})
             r.raise_for_status()
             data = r.json()
+            print(f"Search results: {data}")
             search_results.clear()
             search_results.extend(data.get("results", []))
         except httpx.HTTPStatusError as e:

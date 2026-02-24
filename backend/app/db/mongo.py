@@ -7,16 +7,22 @@
 Vector search uses MongoDB Atlas $vectorSearch (requires a vector search index on mitre_entities.embedding).
 Set VECTOR_SEARCH_INDEX_NAME to match your Atlas index (default: mitre_entities_vector).
 """
+from __future__ import annotations
+
 import logging
-from motor.motor_asyncio import AsyncIOMotorClient
+from dataclasses import dataclass
+from typing import Any
+
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from app.config import settings
-from app.db.neo4j import store_mitre_bundle
-from app.schemas.mitre import MitreBundle, MitreMetadata, MitreObject
+from app.schemas.mitre import MitreBundle, MitreMetadata, MitreObject, MitreVersionInfo
 from app.services.embeddings import _name_description_text, embed_texts_batch
 
 logger = logging.getLogger(__name__)
+
+
 class MitreDBError(Exception):
     """Raised when a MongoDB operation fails (connection, timeout, or write error)."""
     pass
@@ -25,6 +31,17 @@ class MitreDBError(Exception):
 class DuplicateVersionError(MitreDBError):
     """Raised when inserting a MITRE document for a version that already exists."""
     pass
+
+
+@dataclass(frozen=True)
+class EntitySearchResult:
+    """A single entity hit from vector or text search (no embedding)."""
+    id: str
+    type: str | None
+    name: str | None
+    x_mitre_shortname: str | None
+    score: float
+
 
 CURRENT_DOC_ID = "current"
 DATABASE_NAME = "mitre_db"
@@ -35,10 +52,10 @@ COLLECTION_LATEST_ENTITIES = "mitre_entities"
 COLLECTION_DOCUMENTS = "mitre_documents"
 
 _client: AsyncIOMotorClient | None = None
-_db = None
+_db: AsyncIOMotorDatabase[dict[str, Any]] | None = None
 
 
-def _get_db():
+def _get_db() -> AsyncIOMotorDatabase[dict[str, Any]]:
     """Return database instance; call after init_db."""
     global _db
     if _db is None:
@@ -50,7 +67,7 @@ async def init_db() -> None:
     """Connect to MongoDB and ensure indexes. Call once at app startup."""
     global _client, _db
     try:
-        _client = AsyncIOMotorClient(settings.mongodb_uri, serverSelectionTimeoutMS=5000)
+        _client = AsyncIOMotorClient[dict[str, Any]](settings.mongodb_uri, serverSelectionTimeoutMS=5000)
         await _client.admin.command("ping")
         _db = _client[DATABASE_NAME]
 
@@ -89,15 +106,16 @@ async def get_mitre_version() -> str | None:
         doc = await collection.find_one({"_id": CURRENT_DOC_ID})
         if doc is None:
             return None
-        return doc.get("x_mitre_version")
+        version: str | None = doc.get("x_mitre_version")
+        return version
     except PyMongoError as e:
         raise MitreDBError(f"Failed to get MITRE version: {e}") from e
 
 
-async def list_mitre_versions() -> list[dict]:
+async def list_mitre_versions() -> list[MitreVersionInfo]:
     """
     Return all available MITRE versions from mitre_documents.
-    Each item has x_mitre_version (_id) and metadata (MitreMetadata fields).
+    Each item has x_mitre_version and metadata; newest first by last_modified.
     """
     try:
         collection = _get_db()[COLLECTION_DOCUMENTS]
@@ -106,26 +124,35 @@ async def list_mitre_versions() -> list[dict]:
             {"_id": 1, "metadata": 1},
         ).sort("metadata.last_modified", -1)
         docs = await cursor.to_list(length=None)
-        return [
-            {
-                "x_mitre_version": doc["_id"],
-                "metadata": doc.get("metadata", {}),
-            }
-            for doc in docs
-        ]
+        result: list[MitreVersionInfo] = []
+        for doc in docs:
+            mid: str = doc["_id"]
+            meta = doc.get("metadata") or {}
+            result.append(
+                MitreVersionInfo(
+                    x_mitre_version=mid,
+                    metadata=MitreMetadata(
+                        x_mitre_version=meta.get("x_mitre_version", mid),
+                        last_modified=meta.get("last_modified", ""),
+                        size=int(meta.get("size", 0)),
+                        type=meta.get("type", "application/json"),
+                    ),
+                )
+            )
+        return result
     except PyMongoError as e:
         raise MitreDBError(f"Failed to list MITRE versions: {e}") from e
 
 
-async def _entity_docs_with_embeddings(content: MitreBundle) -> list[dict]:
+async def _entity_docs_with_embeddings(content: MitreBundle) -> list[dict[str, Any]]:
     """
     Build entity documents with embedding field for name+description.
     Uses LM Studio (nomic-embed) via OpenAI-compatible embeddings API.
     """
-    entity_docs = []
-    docs_with_text = []
+    entity_docs: list[dict[str, Any]] = []
+    docs_with_text: list[tuple[dict[str, Any], str]] = []
     for obj in content.objects:
-        doc = {"_id": obj.id, **obj.model_dump(mode="json")}
+        doc: dict[str, Any] = {"_id": obj.id, **obj.model_dump(mode="json")}
         entity_docs.append(doc)
         text = _name_description_text(obj.name, obj.description)
         if text:
@@ -235,14 +262,25 @@ async def _ensure_vector_search_index() -> None:
         logger.error("Could not create vector search index", e)
 
 
+def _doc_to_entity_search_result(doc: dict[str, Any]) -> EntitySearchResult:
+    """Map a MongoDB search result document to EntitySearchResult."""
+    eid: str = doc.get("id") or doc.get("_id") or ""
+    return EntitySearchResult(
+        id=eid,
+        type=doc.get("type"),
+        name=doc.get("name"),
+        x_mitre_shortname=doc.get("x_mitre_shortname"),
+        score=float(doc.get("_score", 0.0)),
+    )
+
+
 async def search_entities_by_embedding(
     query_embedding: list[float],
     top_k: int = 5,
-) -> list[dict]:
+) -> list[EntitySearchResult]:
     """
     Return top_k MITRE entities most similar to query_embedding using MongoDB Atlas $vectorSearch.
     Requires a vector search index on the collection (path: embedding, cosine similarity).
-    Each returned dict has entity fields (type, name, description, etc.), no embedding, plus _score.
     """
     if not query_embedding or top_k <= 0:
         return []
@@ -279,20 +317,20 @@ async def search_entities_by_embedding(
         raise MitreDBError(
             f"Vector search failed (is Atlas vector index '{settings.vector_search_index_name}' defined?): {e}"
         ) from e
-    return list(docs)
+    return [_doc_to_entity_search_result(d) for d in docs]
 
 
-async def search_entities_by_text(query: str, top_k: int = 10) -> list[dict]:
+async def search_entities_by_text(query: str, top_k: int = 10) -> list[EntitySearchResult]:
     """
     Match query as case-insensitive substring in name only.
-    Excludes relationships. Returns same shape as vector search (id, type, name, x_mitre_shortname, _score=1.0).
+    Excludes relationships. Returns same shape as vector search (id, type, name, x_mitre_shortname, score=1.0).
     """
     query = (query or "").strip()
     if not query or top_k <= 0:
         return []
     try:
         collection = _get_db()[COLLECTION_LATEST_ENTITIES]
-        regex = {"$regex": query, "$options": "i"}
+        regex: dict[str, Any] = {"$regex": query, "$options": "i"}
         cursor = collection.find(
             {
                 "type": {"$ne": "relationship"},
@@ -301,9 +339,7 @@ async def search_entities_by_text(query: str, top_k: int = 10) -> list[dict]:
             {"_id": 1, "id": 1, "type": 1, "name": 1, "x_mitre_shortname": 1},
         ).limit(top_k)
         docs = await cursor.to_list(length=top_k)
-        for d in docs:
-            d["_score"] = 1.0
-        return docs
+        return [_doc_to_entity_search_result({**d, "_score": 1.0}) for d in docs]
     except PyMongoError as e:
         raise MitreDBError(f"Text search failed: {e}") from e
 
@@ -347,11 +383,6 @@ async def put_mitre_document(
             {"_id": CURRENT_DOC_ID, "x_mitre_version": x_mitre_version},
             upsert=True,
         )
-        # 4. Sync to Neo4j (best-effort; log and continue on failure)
-        try:
-            await store_mitre_bundle(content)
-        except Exception as e:
-            logger.error("Neo4j sync failed after put_mitre_document:", e)
     except PyMongoError as e:
         raise MitreDBError(f"Failed to store MITRE document: {e}") from e
 
@@ -395,10 +426,5 @@ async def insert_mitre_document(
             {"_id": CURRENT_DOC_ID, "x_mitre_version": x_mitre_version},
             upsert=True,
         )
-        # 4. Sync to Neo4j (best-effort; log and continue on failure)
-        try:
-            await store_mitre_bundle(content)
-        except Exception as e:
-            logger.error("Neo4j sync failed after insert_mitre_document:", e)
     except PyMongoError as e:
         raise MitreDBError(f"Failed to store MITRE document: {e}") from e

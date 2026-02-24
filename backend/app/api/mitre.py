@@ -10,13 +10,12 @@ from app.db import (
     insert_mitre_document,
     list_mitre_versions,
     put_mitre_document,
+    store_mitre_bundle,
 )
 from app.schemas.mitre import (
     MitreBundle,
-    MitreContentResponse,
     MitreMetadata,
     MitrePutResponse,
-    MitreVersionInfo,
     MitreVersionResponse,
     MitreVersionsResponse,
 )
@@ -61,17 +60,10 @@ async def list_mitre_versions_endpoint() -> MitreVersionsResponse:
     Returns version id and metadata for each; newest first by last_modified.
     """
     try:
-        raw = await list_mitre_versions()
+        versions = await list_mitre_versions()
     except (MitreDBError, RuntimeError) as e:
         _handle_db_error(e)
-    items = [
-        MitreVersionInfo(
-            x_mitre_version=v["x_mitre_version"],
-            metadata=MitreMetadata(**v["metadata"]),
-        )
-        for v in raw
-    ]
-    return MitreVersionsResponse(versions=items)
+    return MitreVersionsResponse(versions=versions)
 
 #subtask 2.1, 2.4
 @router.get("/version", response_model=MitreVersionResponse)
@@ -125,6 +117,7 @@ async def put_mitre_by_version(x_mitre_version: str, body: MitreBundle) -> Mitre
         await put_mitre_document(x_mitre_version, body, metadata)
     except (MitreDBError, RuntimeError) as e:
         _handle_db_error(e)
+    await store_mitre_bundle(body)
     return MitrePutResponse(
         status="updated",
         x_mitre_version=x_mitre_version,
@@ -157,6 +150,7 @@ async def put_mitre(body: MitreBundle) -> MitrePutResponse:
         ) from e
     except (MitreDBError, RuntimeError) as e:
         _handle_db_error(e)
+    await store_mitre_bundle(body)
     return MitrePutResponse(
         status="created",
         x_mitre_version=x_mitre_version,

@@ -1,6 +1,7 @@
 """MongoDB and Neo4j connection and MITRE document access."""
 from app.db.mongo import (
     DuplicateVersionError,
+    EntitySearchResult,
     MitreDBError,
     close_db,
     get_mitre_content,
@@ -17,6 +18,7 @@ from app.db.neo4j import close_neo4j, init_neo4j, store_mitre_bundle
 
 __all__ = [
     "DuplicateVersionError",
+    "EntitySearchResult",
     "MitreDBError",
     "close_db",
     "close_neo4j",

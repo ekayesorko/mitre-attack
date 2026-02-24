@@ -1,7 +1,7 @@
 """Search API: vector search over MITRE entities by query (suffix/prefix)."""
 from fastapi import APIRouter, HTTPException, Query
 
-from app.db.mongo import MitreDBError, search_entities_by_embedding, search_entities_by_text
+from app.db.mongo import EntitySearchResult, MitreDBError, search_entities_by_embedding, search_entities_by_text
 from app.schemas.search import SearchResponse, SearchResultEntry
 from app.services.embeddings import embed_text
 
@@ -10,32 +10,34 @@ router = APIRouter()
 DEFAULT_TOP_K = 10
 
 
-def _doc_to_entry(doc: dict) -> SearchResultEntry:
-    """Map MongoDB search result doc (vector or text) to SearchResultEntry."""
+def _result_to_entry(doc: EntitySearchResult) -> SearchResultEntry:
+    """Map EntitySearchResult to SearchResultEntry."""
     return SearchResultEntry(
-        id=doc.get("id") or doc.get("_id", ""),
-        type=doc.get("type"),
-        name=doc.get("name"),
-        x_mitre_shortname=doc.get("x_mitre_shortname"),
-        score=float(doc.get("_score", 0.0)),
+        id=doc.id,
+        type=doc.type,
+        name=doc.name,
+        x_mitre_shortname=doc.x_mitre_shortname,
+        score=doc.score,
     )
 
 
-def _merge_vector_and_text(vector_docs: list[dict], text_docs: list[dict], top_k: int) -> list[dict]:
+def _merge_vector_and_text(
+    vector_docs: list[EntitySearchResult],
+    text_docs: list[EntitySearchResult],
+    top_k: int,
+) -> list[EntitySearchResult]:
     """Put text (literal) matches first, then fill with vector-only results up to top_k."""
-    seen_ids = set()
-    merged = []
+    seen_ids: set[str] = set()
+    merged: list[EntitySearchResult] = []
     for d in text_docs:
-        eid = d.get("id") or d.get("_id")
-        if eid and eid not in seen_ids:
-            seen_ids.add(eid)
+        if d.id and d.id not in seen_ids:
+            seen_ids.add(d.id)
             merged.append(d)
             if len(merged) >= top_k:
                 return merged
     for d in vector_docs:
-        eid = d.get("id") or d.get("_id")
-        if eid and eid not in seen_ids:
-            seen_ids.add(eid)
+        if d.id and d.id not in seen_ids:
+            seen_ids.add(d.id)
             merged.append(d)
             if len(merged) >= top_k:
                 return merged
@@ -62,7 +64,7 @@ async def search_entities(
         else:
             vector_docs = await search_entities_by_embedding(embedding, top_k=top_k)
             docs = _merge_vector_and_text(vector_docs, text_docs, top_k)
-        results = [_doc_to_entry(d) for d in docs]
+        results = [_result_to_entry(d) for d in docs]
         return SearchResponse(results=results)
     except MitreDBError as e:
         raise HTTPException(
