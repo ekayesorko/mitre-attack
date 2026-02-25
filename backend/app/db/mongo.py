@@ -7,14 +7,17 @@
 Vector search uses MongoDB Atlas $vectorSearch (requires a vector search index on mitre_entities.embedding).
 Set VECTOR_SEARCH_INDEX_NAME to match your Atlas index (default: mitre_entities_vector).
 """
+import asyncio
 import logging
+import time
+from collections.abc import Awaitable, Callable
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from app.config import settings
 from app.db.neo4j import store_mitre_bundle
 from app.schemas.mitre import MitreBundle, MitreMetadata, MitreObject
-from app.services.embeddings import _name_description_text, embed_texts_batch
+from app.utils.entity_text import entity_text_for_embedding
 
 logger = logging.getLogger(__name__)
 class MitreDBError(Exception):
@@ -46,26 +49,64 @@ def _get_db():
     return _db
 
 
+def _is_not_primary_error(exc: BaseException) -> bool:
+    """True if error is NotWritablePrimary (10107) or similar replica set not ready."""
+    if isinstance(exc, PyMongoError):
+        code = getattr(exc, "code", None)
+        if code == 10107:
+            return True
+        msg = str(exc).lower()
+        if "not primary" in msg or "notwritableprimary" in msg:
+            return True
+    return False
+
+
 async def init_db() -> None:
-    """Connect to MongoDB and ensure indexes. Call once at app startup."""
+    """Connect to MongoDB and ensure indexes. Call once at app startup.
+    Retries on NotWritablePrimary so Atlas Local (single-node replica set) has time to become primary.
+    """
     global _client, _db
-    try:
-        _client = AsyncIOMotorClient(settings.mongodb_uri, serverSelectionTimeoutMS=5000)
-        await _client.admin.command("ping")
-        _db = _client[DATABASE_NAME]
+    max_attempts = 10
+    base_delay = 2.0
+    last_error: BaseException | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            _client = AsyncIOMotorClient(settings.mongodb_uri, serverSelectionTimeoutMS=5000)
+            await _client.admin.command("ping")
+            _db = _client[DATABASE_NAME]
 
-        # current_schema: single doc, no index needed beyond _id
-        # mitre_entities: index by type for listing/filtering
-        await _db[COLLECTION_LATEST_ENTITIES].create_index([("type", 1)])
-        # mitre_documents: keyed by version (_id), no extra index needed
-        await _db[COLLECTION_DOCUMENTS].create_index([("_id", 1)])
+            # current_schema: single doc, no index needed beyond _id
+            # mitre_entities: index by type for listing/filtering
+            await _db[COLLECTION_LATEST_ENTITIES].create_index([("type", 1)])
+            # mitre_documents: keyed by version (_id), no extra index needed
+            await _db[COLLECTION_DOCUMENTS].create_index([("_id", 1)])
 
-        # Vector search index (Atlas only; createSearchIndexes only works on Atlas)
-        await _ensure_vector_search_index()
-    except PyMongoError as e:
-        _client = None
-        _db = None
-        raise MitreDBError(f"MongoDB connection or init failed: {e}") from e
+            # Vector search index (Atlas only; createSearchIndexes only works on Atlas)
+            await _ensure_vector_search_index()
+            return
+        except PyMongoError as e:
+            last_error = e
+            if _client is not None:
+                try:
+                    _client.close()
+                except Exception:
+                    pass
+                _client = None
+            _db = None
+            if _is_not_primary_error(e) and attempt < max_attempts:
+                delay = base_delay * (1.5 ** (attempt - 1))
+                logger.warning(
+                    "MongoDB not primary yet (attempt %s/%s), retrying in %.1fs: %s",
+                    attempt,
+                    max_attempts,
+                    delay,
+                    e,
+                )
+                await asyncio.sleep(delay)
+            else:
+                raise MitreDBError(f"MongoDB connection or init failed: {e}") from e
+    if last_error is not None:
+        raise MitreDBError(f"MongoDB connection or init failed: {last_error}") from last_error
 
 
 async def close_db() -> None:
@@ -117,22 +158,25 @@ async def list_mitre_versions() -> list[dict]:
         raise MitreDBError(f"Failed to list MITRE versions: {e}") from e
 
 
-async def _entity_docs_with_embeddings(content: MitreBundle) -> list[dict]:
+async def _entity_docs_with_embeddings(
+    content: MitreBundle,
+    embed_batch: Callable[[list[str]], Awaitable[list[list[float]]]],
+) -> list[dict]:
     """
     Build entity documents with embedding field for name+description.
-    Uses LM Studio (nomic-embed) via OpenAI-compatible embeddings API.
+    embed_batch(texts) returns list of vectors; provided by caller (e.g. embedding service).
     """
     entity_docs = []
     docs_with_text = []
     for obj in content.objects:
         doc = {"_id": obj.id, **obj.model_dump(mode="json")}
         entity_docs.append(doc)
-        text = _name_description_text(obj.name, obj.description)
+        text = entity_text_for_embedding(obj.name, obj.description)
         if text:
             docs_with_text.append((doc, text))
     if docs_with_text:
         texts = [t for _, t in docs_with_text]
-        embeddings = await embed_texts_batch(texts)
+        embeddings = await embed_batch(texts)
         for (doc, _), vec in zip(docs_with_text, embeddings):
             doc["embedding"] = vec
     return entity_docs
@@ -200,10 +244,31 @@ async def get_mitre_content_by_version(x_mitre_version: str) -> tuple[MitreBundl
 VECTOR_EMBEDDING_DIMENSIONS = 768
 
 
+async def _wait_for_vector_index_ready(timeout_sec: float = 60.0) -> bool:
+    """Poll until the vector search index is queryable or timeout. Returns True if ready."""
+    collection = _get_db()[COLLECTION_LATEST_ENTITIES]
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        try:
+            cursor = collection.aggregate([
+                {"$listSearchIndexes": {"name": settings.vector_search_index_name}}
+            ])
+            docs = await cursor.to_list(length=1)
+            if docs and docs[0].get("queryable") is True:
+                logger.info("Vector search index is ready")
+                return True
+        except PyMongoError as e:
+            logger.debug("List search indexes: %s", e)
+        await asyncio.sleep(2.0)
+    logger.warning("Vector search index not ready within %.0fs", timeout_sec)
+    return False
+
+
 async def _ensure_vector_search_index() -> None:
     """
     Create the vector search index on mitre_entities if missing.
-    Only succeeds on MongoDB Atlas (createSearchIndexes is Atlas-only).
+    Only succeeds on MongoDB Atlas / Atlas Local (createSearchIndexes is Atlas-only).
+    Waits for the index to become queryable so RAG retrieval works on first request.
     """
     try:
         res = await _get_db().command(
@@ -228,11 +293,12 @@ async def _ensure_vector_search_index() -> None:
             }
         )
         if res.get("ok") == 1 and res.get("indexesCreated"):
-            logger.info("Vector search index created:")
+            logger.info("Vector search index created, waiting for it to be ready")
+            await _wait_for_vector_index_ready()
         elif res.get("ok") == 1:
             logger.info("Vector search index already exists or creation skipped")
     except PyMongoError as e:
-        logger.error("Could not create vector search index", e)
+        logger.error("Could not create vector search index: %s", e)
 
 
 async def search_entities_by_embedding(
@@ -266,6 +332,7 @@ async def search_entities_by_embedding(
                 "type": 1,
                 "name": 1,
                 "id": 1,
+                "description": 1,
                 "x_mitre_shortname": 1,
                 "_score": {"$meta": "vectorSearchScore"},
             }
@@ -298,7 +365,7 @@ async def search_entities_by_text(query: str, top_k: int = 10) -> list[dict]:
                 "type": {"$ne": "relationship"},
                 "name": regex,
             },
-            {"_id": 1, "id": 1, "type": 1, "name": 1, "x_mitre_shortname": 1},
+            {"_id": 1, "id": 1, "type": 1, "name": 1, "description": 1, "x_mitre_shortname": 1},
         ).limit(top_k)
         docs = await cursor.to_list(length=top_k)
         for d in docs:
@@ -312,12 +379,14 @@ async def put_mitre_document(
     x_mitre_version: str,
     content: MitreBundle,
     metadata: MitreMetadata,
+    embed_batch: Callable[[list[str]], Awaitable[list[list[float]]]],
 ) -> None:
     """
     Store MITRE data in three collections:
     - current_schema: set current version
     - mitre_entities: replace with latest entities (one doc per entity, _id = entity id)
     - mitre_documents: store whole bundle for this version (_id = version)
+    embed_batch: callable to embed a list of texts (e.g. from embedding service).
     """
     db = _get_db()
     docs_collection = db[COLLECTION_DOCUMENTS]
@@ -337,7 +406,7 @@ async def put_mitre_document(
 
         # 2. Replace latest entities: clear and insert current version's entities (each with _id = entity id, plus embedding for name+description)
         await entities_collection.delete_many({})
-        entity_docs = await _entity_docs_with_embeddings(content)
+        entity_docs = await _entity_docs_with_embeddings(content, embed_batch)
         if entity_docs:
             await entities_collection.insert_many(entity_docs)
 
@@ -360,6 +429,7 @@ async def insert_mitre_document(
     x_mitre_version: str,
     content: MitreBundle,
     metadata: MitreMetadata,
+    embed_batch: Callable[[list[str]], Awaitable[list[list[float]]]],
 ) -> None:
     db = _get_db()
     docs_collection = db[COLLECTION_DOCUMENTS]
@@ -385,7 +455,7 @@ async def insert_mitre_document(
     try:
         # 2. Replace latest entities with this version's entities (with name+description embeddings)
         await entities_collection.delete_many({})
-        entity_docs = await _entity_docs_with_embeddings(content)
+        entity_docs = await _entity_docs_with_embeddings(content, embed_batch)
         if entity_docs:
             await entities_collection.insert_many(entity_docs)
 

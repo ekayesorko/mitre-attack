@@ -1,11 +1,13 @@
 """RAG: retrieve relevant MITRE entities from MongoDB (pre-embedded) for chat context."""
 from __future__ import annotations
 
-from app.db.mongo import MitreDBError, search_entities_by_embedding
-from app.services.embeddings import embed_text
 import logging
 
+from app.db.mongo import MitreDBError, search_entities_by_embedding
+from app.services.protocols import EmbeddingService
+
 logger = logging.getLogger(__name__)
+
 
 def _format_entity(d: dict) -> str:
     """Format a single entity for context (name, type, description)."""
@@ -23,31 +25,48 @@ def _format_entity(d: dict) -> str:
     return "\n".join(parts) if parts else ""
 
 
-def format_entities_as_context(entities: list[dict], separator: str = "\n\n---\n\n") -> str:
-    """Turn a list of entity dicts (from search_entities_by_embedding) into one context string."""
+def format_entities_as_context(
+    entities: list[dict], separator: str = "\n\n---\n\n"
+) -> str:
+    """Turn a list of entity dicts into one context string."""
     if not entities:
         return ""
     return separator.join(_format_entity(e) for e in entities)
 
 
-async def get_relevant_mitre_context(query: str, top_k: int = 5) -> str:
-    """
-    Embed the query, retrieve top_k similar MITRE entities from MongoDB, and return
-    formatted context string for RAG. Uses pre-computed entity embeddings.
-    On any failure (embedding or vector search), returns empty string so chat can proceed without RAG.
-    """
-    query = (query or "").strip()
-    if not query:
-        return ""
-    try:
-        embedding = await embed_text(query)
-        if not embedding:
+class RAGRetrievalService:
+    """RAG retrieval using an embedding service and MongoDB vector search."""
+
+    def __init__(
+        self,
+        embedding_service: EmbeddingService,
+        *,
+        default_top_k: int = 5,
+    ) -> None:
+        self._embedding = embedding_service
+        self._default_top_k = default_top_k
+
+    async def get_context(self, query: str, top_k: int | None = None) -> str:
+        k = top_k if top_k is not None else self._default_top_k
+        query = (query or "").strip()
+        if not query:
+            logger.debug("RAG: empty query, no context")
             return ""
-        entities = await search_entities_by_embedding(embedding, top_k=top_k)
-        return format_entities_as_context(entities)
-    except MitreDBError as e:
-        logger.error("RAG: MongoDB/vector search failed, continuing without context:", e)
-        return ""
-    except Exception as e:
-        logger.error("RAG: embedding or retrieval failed, continuing without context:", e)
-        return ""
+        try:
+            embedding = await self._embedding.embed_text(query)
+            if not embedding:
+                logger.warning("RAG: embedding service returned empty vector (check EMBEDDING_MODEL and Ollama)")
+                return ""
+            entities = await search_entities_by_embedding(embedding, top_k=k)
+            context = format_entities_as_context(entities)
+            if not context:
+                logger.warning(
+                    "RAG: no entities found (vector index ready? mitre_entities populated with embeddings?)"
+                )
+            return context
+        except MitreDBError as e:
+            logger.warning("RAG: MongoDB/vector search failed: %s", e)
+            return ""
+        except Exception as e:
+            logger.warning("RAG: embedding or retrieval failed: %s", e)
+            return ""

@@ -8,6 +8,7 @@ class SearchResultEntry(BaseModel):
     id: str = Field(..., description="STIX entity ID")
     type: str | None = Field(None, description="Entity type (e.g. attack-pattern, course-of-action)")
     name: str | None = Field(None, description="Entity name")
+    description: str | None = Field(None, description="Entity description if present")
     x_mitre_shortname: str | None = Field(None, description="MITRE short name if present")
     score: float = Field(..., description="Similarity score from vector search (higher = more similar)")
 

@@ -1,82 +1,52 @@
-"""Chat completion service via LM Studio with LangChain and RAG (MongoDB embedded entities)."""
+"""Chat completion via LM Studio with RAG (MITRE entities)."""
 from __future__ import annotations
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+import logging
 
 from app.config import settings
-from app.services.rag import get_relevant_mitre_context
-import logging
+from app.services.messages import get_last_user_content, to_langchain_messages
+from app.services.protocols import LLMService, RetrievalService
 
 logger = logging.getLogger(__name__)
 
-def _to_langchain_message(m: dict) -> HumanMessage | AIMessage | SystemMessage:
-    role = (m.get("role") or "user").strip().lower()
-    content = (m.get("content") or "").strip()
-    if role == "system":
-        return SystemMessage(content=content or " ")
-    if role == "assistant":
-        return AIMessage(content=content or " ")
-    return HumanMessage(content=content or "Hello.")
+# System message: RAG instruction. "Relevant entities" block is appended when context is retrieved.
+SYSTEM_MESSAGE = (
+    "You answer questions about MITRE ATT&CK using the relevant entities provided below.\n"
+    "- Base your answers on the 'Relevant entities' section when present. Cite specific techniques, tactics, or other entities where helpful.\n"
+    "- If the context does not contain relevant information for the question, say so clearly and do not invent details.\n"
+    "- Be concise and accurate. If unsure, indicate uncertainty rather than guessing."
+)
 
 
-async def chat(
-    messages: list[dict[str, str]],
-    system: str | None = None,
-) -> tuple[str, str]:
-    """
-    Multi-turn chat with RAG: retrieves relevant MITRE entities from MongoDB (pre-embedded),
-    injects them as context, then uses LangChain ChatOpenAI (LM Studio) to generate a reply.
-    messages: list of {"role": "user"|"assistant"|"system", "content": "..."}.
-    """
-    # Last user message drives RAG retrieval
-    last_user_content = ""
-    for m in reversed(messages):
-        if (m.get("role") or "").strip().lower() == "user":
-            last_user_content = (m.get("content") or "").strip()
-            break
+class RagChatService:
+    def __init__(
+        self,
+        retrieval: RetrievalService,
+        llm: LLMService,
+        *,
+        rag_top_k: int | None = None,
+    ) -> None:
+        self._retrieval = retrieval
+        self._llm = llm
+        self._rag_top_k = rag_top_k if rag_top_k is not None else settings.rag_top_k
 
-    rag_context = ""
-    if last_user_content:
+    async def chat(
+        self,
+        messages: list[dict[str, str]],
+        system: str | None = None,
+    ) -> tuple[str, str]:
+        last_user = get_last_user_content(messages)
         try:
-            rag_context = await get_relevant_mitre_context(last_user_content, top_k=settings.rag_top_k)
+            rag_context = await self._retrieval.get_context(
+                last_user, top_k=self._rag_top_k
+            )
         except Exception as e:
-            logger.error("Chat: RAG context retrieval failed, continuing without context:", e)
-
-    # Build system block: optional user system + RAG context
-    system_parts = []
-    if system and system.strip():
-        system_parts.append(system.strip())
-    if rag_context:
-        system_parts.append(
-            "Use the following relevant MITRE ATT&CK entities to answer the user. "
-            "If the context does not contain relevant information, say so.\n\n"
-            f"Relevant entities:\n{rag_context}"
-        )
-    system_content = "\n\n".join(system_parts) if system_parts else None
-
-    llm = ChatOpenAI(
-        model=settings.chat_model,
-        base_url=settings.lm_studio_base_url,
-        api_key=settings.lm_studio_api_key,
-        temperature=0.7,
-        max_tokens=1024,
-    )
-
-    lc_messages: list[HumanMessage | AIMessage | SystemMessage] = []
-    if system_content:
-        lc_messages.append(SystemMessage(content=system_content))
-    for m in messages:
-        lc_messages.append(_to_langchain_message(m))
-    if not any(isinstance(msg, HumanMessage) for msg in lc_messages):
-        lc_messages.append(HumanMessage(content="Hello."))
-
-    try:
-        response = await llm.ainvoke(lc_messages)
-    except Exception as e:
-        logger.error("Chat: LLM invocation failed")
-        raise RuntimeError(f"LLM unavailable (is LM Studio running?): {e}") from e
-
-    reply = (response.content or "").strip() if hasattr(response, "content") else ""
-    model_used = getattr(response, "response_metadata", {}).get("model_name") or settings.chat_model
-    return reply, model_used
+            logger.warning("RAG failed, continuing without context: %s", e)
+            rag_context = ""
+        if not rag_context.strip():
+            logger.info("Chat using no RAG context (query=%r)", last_user[:80] if last_user else "")
+        system_content = SYSTEM_MESSAGE
+        if rag_context.strip():
+            system_content += "\n\nRelevant entities:\n" + rag_context.strip()
+        lc_messages = to_langchain_messages(messages, system_content)
+        return await self._llm.invoke(lc_messages)

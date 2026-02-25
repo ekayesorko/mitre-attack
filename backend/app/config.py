@@ -47,6 +47,8 @@ class Settings:
         self.chat_model = _required("CHAT_MODEL")
         self.embedding_model = _required("EMBEDDING_MODEL")
         self.rag_top_k = _required_int("RAG_TOP_K")
+        # Timeout in seconds for LLM requests (RAG + generation can be slow)
+        self.llm_request_timeout = float(os.environ.get("LLM_REQUEST_TIMEOUT", "300"))
 
         # Test / external API base (e.g. for test_mitre.py)
         self.mitre_api_base = _required("MITRE_API_BASE").rstrip("/")
