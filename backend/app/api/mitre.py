@@ -2,26 +2,17 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 
-from app.db import (
-    DuplicateVersionError,
-    MitreDBError,
-    get_mitre_content_by_version,
-    get_mitre_version,
-    insert_mitre_document,
-    list_mitre_versions,
-    put_mitre_document,
-)
-from app.dependencies import get_embedding_service
-from app.services.protocols import EmbeddingService
+from app.db.mongo import DuplicateVersionError, MongoDBRepo, MitreDBError
+from app.dependencies import get_mitre_db, get_mitre_write_service
 from app.schemas.mitre import (
     MitreBundle,
-    MitreContentResponse,
     MitreMetadata,
     MitrePutResponse,
     MitreVersionInfo,
     MitreVersionResponse,
     MitreVersionsResponse,
 )
+from app.services.protocols import MitreWriteService
 
 router = APIRouter()
 
@@ -57,13 +48,15 @@ def _handle_db_error(exc: Exception) -> None:
 
 ## extra endpoint
 @router.get("/list", response_model=MitreVersionsResponse)
-async def list_mitre_versions_endpoint() -> MitreVersionsResponse:
+async def list_mitre_versions_endpoint(
+    mitre_db: MongoDBRepo = Depends(get_mitre_db),
+) -> MitreVersionsResponse:
     """
     List all available MITRE data versions stored in the backend.
     Returns version id and metadata for each; newest first by last_modified.
     """
     try:
-        raw = await list_mitre_versions()
+        raw = await mitre_db.list_mitre_versions()
     except (MitreDBError, RuntimeError) as e:
         _handle_db_error(e)
     items = [
@@ -77,12 +70,14 @@ async def list_mitre_versions_endpoint() -> MitreVersionsResponse:
 
 #subtask 2.1, 2.4
 @router.get("/version", response_model=MitreVersionResponse)
-async def get_mitre_version_endpoint() -> MitreVersionResponse:
+async def get_mitre_version_endpoint(
+    mitre_db: MongoDBRepo = Depends(get_mitre_db),
+) -> MitreVersionResponse:
     """
     return the latest x_mitre_version stored in the backend.
     """
     try:
-        version = await get_mitre_version()
+        version = await mitre_db.get_mitre_version()
     except (MitreDBError, RuntimeError) as e:
         _handle_db_error(e)
     if version is None:
@@ -92,12 +87,15 @@ async def get_mitre_version_endpoint() -> MitreVersionResponse:
 
 ##2.2 2.5
 @router.get("/{x_mitre_version}")
-async def download_mitre_version_endpoint(x_mitre_version: str) -> Response:
+async def download_mitre_version_endpoint(
+    x_mitre_version: str,
+    mitre_db: MongoDBRepo = Depends(get_mitre_db),
+) -> Response:
     """
     Return MITRE bundle for the given version as a downloadable JSON file.
     """
     try:
-        result = await get_mitre_content_by_version(x_mitre_version)
+        result = await mitre_db.get_mitre_content_by_version(x_mitre_version)
     except (MitreDBError, RuntimeError) as e:
         _handle_db_error(e)
     if result is None:
@@ -121,16 +119,14 @@ async def download_mitre_version_endpoint(x_mitre_version: str) -> Response:
 async def put_mitre_by_version(
     x_mitre_version: str,
     body: MitreBundle,
-    embedding_service: EmbeddingService = Depends(get_embedding_service),
+    mitre_write_service: MitreWriteService = Depends(get_mitre_write_service),
 ) -> MitrePutResponse:
     """
     User provides new MITRE file or content; validated and stored.
     """
     metadata = _make_metadata(x_mitre_version, body)
     try:
-        await put_mitre_document(
-            x_mitre_version, body, metadata, embedding_service.embed_texts_batch
-        )
+        await mitre_write_service.put_document(x_mitre_version, body, metadata)
     except (MitreDBError, RuntimeError) as e:
         _handle_db_error(e)
     return MitrePutResponse(
@@ -146,7 +142,7 @@ async def put_mitre_by_version(
 @router.put("/", response_model=MitrePutResponse, status_code=201)
 async def put_mitre(
     body: MitreBundle,
-    embedding_service: EmbeddingService = Depends(get_embedding_service),
+    mitre_write_service: MitreWriteService = Depends(get_mitre_write_service),
 ) -> MitrePutResponse:
     """
     Accepts MITRE bundle as JSON; x_mitre_version is taken from the bundle's spec_version.
@@ -160,9 +156,7 @@ async def put_mitre(
         )
     metadata = _make_metadata(x_mitre_version, body)
     try:
-        await insert_mitre_document(
-            x_mitre_version, body, metadata, embedding_service.embed_texts_batch
-        )
+        await mitre_write_service.insert_document(x_mitre_version, body, metadata)
     except DuplicateVersionError as e:
         raise HTTPException(
             status_code=409,

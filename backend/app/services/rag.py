@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from app.db.mongo import MitreDBError, search_entities_by_embedding
+from app.db.mongo import MongoDBRepo, MitreDBError
 from app.services.protocols import EmbeddingService
 
 logger = logging.getLogger(__name__)
@@ -40,10 +40,12 @@ class RAGRetrievalService:
     def __init__(
         self,
         embedding_service: EmbeddingService,
+        mitre_db: MongoDBRepo,
         *,
         default_top_k: int = 5,
     ) -> None:
         self._embedding = embedding_service
+        self._mitre_db = mitre_db
         self._default_top_k = default_top_k
 
     async def get_context(self, query: str, top_k: int | None = None) -> str:
@@ -57,7 +59,7 @@ class RAGRetrievalService:
             if not embedding:
                 logger.warning("RAG: embedding service returned empty vector (check EMBEDDING_MODEL and Ollama)")
                 return ""
-            entities = await search_entities_by_embedding(embedding, top_k=k)
+            entities = await self._mitre_db.search_entities_by_embedding(embedding, top_k=k)
             context = format_entities_as_context(entities)
             if not context:
                 logger.warning(

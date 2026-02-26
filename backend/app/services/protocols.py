@@ -5,7 +5,31 @@ from typing import Protocol, runtime_checkable
 
 from langchain_core.messages import BaseMessage
 
+from app.schemas.mitre import MitreBundle, MitreMetadata
 from app.services.models import ChatMessage
+
+
+@runtime_checkable
+class MitreWriteService(Protocol):
+    """Orchestrator for MITRE write operations: embedding + persistence."""
+
+    async def put_document(
+        self,
+        x_mitre_version: str,
+        content: MitreBundle,
+        metadata: MitreMetadata,
+    ) -> None:
+        """Store or replace MITRE document and entities (with embeddings), set current version."""
+        ...
+
+    async def insert_document(
+        self,
+        x_mitre_version: str,
+        content: MitreBundle,
+        metadata: MitreMetadata,
+    ) -> None:
+        """Insert new MITRE document and entities (with embeddings); raises if version exists."""
+        ...
 
 
 @runtime_checkable
