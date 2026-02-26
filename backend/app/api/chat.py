@@ -17,12 +17,12 @@ async def chat_endpoint(
 ) -> ChatResponse:
     """
     Multi-turn chat with the chatbot (LM Studio, google/gemma-3-4b).
-    Send `messages` (conversation history; last message should be from the user) and optional `system` prompt.
-    Ensure LM Studio is running with the model loaded at LM_STUDIO_URI (default http://localhost:1234/v1).
+    Send `messages` (conversation history; last message should be from the user).
+    System prompt is fixed; ensure LM Studio is running at LM_STUDIO_URI (default http://localhost:1234/v1).
     """
     try:
         messages_dicts = [{"role": m.role, "content": m.content} for m in body.messages]
-        reply, model = await chat_service.chat(messages_dicts, body.system)
+        reply, model = await chat_service.chat(messages_dicts)
         return ChatResponse(reply=reply, model=model)
     except MitreDBError as e:
         raise HTTPException(

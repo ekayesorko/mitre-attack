@@ -41,10 +41,6 @@ class LLMService(Protocol):
 class ChatService(Protocol):
     """Abstraction for multi-turn chat with optional RAG."""
 
-    async def chat(
-        self,
-        messages: list[dict[str, str]],
-        system: str | None = None,
-    ) -> tuple[str, str]:
+    async def chat(self, messages: list[dict[str, str]]) -> tuple[str, str]:
         """Run chat; returns (reply, model_name)."""
         ...

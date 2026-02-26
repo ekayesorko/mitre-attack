@@ -30,11 +30,7 @@ class RagChatService:
         self._llm = llm
         self._rag_top_k = rag_top_k if rag_top_k is not None else settings.rag_top_k
 
-    async def chat(
-        self,
-        messages: list[dict[str, str]],
-        system: str | None = None,
-    ) -> tuple[str, str]:
+    async def chat(self, messages: list[dict[str, str]]) -> tuple[str, str]:
         last_user = get_last_user_content(messages)
         try:
             rag_context = await self._retrieval.get_context(
