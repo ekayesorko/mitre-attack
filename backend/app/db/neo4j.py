@@ -205,10 +205,12 @@ async def close_neo4j(repo: Neo4jRepo) -> None:
 
 async def _clear_mitre_graph(tx, batch_size: int = _DELETE_BATCH_SIZE) -> None:
     """Delete all MitreEntity nodes and their relationships in batched transactions."""
-    # Stream nodes and delete in chunks to avoid a single huge transaction
+    # Stream nodes and delete in chunks to avoid a single huge transaction.
+    # Outer RETURN required: Neo4j does not allow a query to conclude with CALL.
     cypher = (
         "MATCH (n:MitreEntity) "
-        "CALL { WITH n DETACH DELETE n RETURN 1 AS _ } IN TRANSACTIONS OF $batch_size ROWS"
+        "CALL { WITH n DETACH DELETE n RETURN 1 AS _ } IN TRANSACTIONS OF $batch_size ROWS "
+        "RETURN count(*) AS _"
     )
     await tx.run(cypher, batch_size=batch_size)
 
