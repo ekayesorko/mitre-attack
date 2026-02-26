@@ -24,7 +24,6 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    """Chat completion response from LM Studio (google/gemma-3-4b)."""
+    """Chat completion response."""
 
     reply: str = Field(..., description="Assistant reply text")
-    model: str = Field(..., description="Model used (e.g. google/gemma-3-4b)")

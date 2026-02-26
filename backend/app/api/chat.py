@@ -5,6 +5,7 @@ from app.dependencies import get_chat_service
 from app.db.mongo import MitreDBError
 from app.exceptions import LLMUnavailableError, ServiceError
 from app.schemas.chat import ChatRequest, ChatResponse
+from app.services.models import ChatMessage
 from app.services.protocols import ChatService
 
 router = APIRouter()
@@ -21,9 +22,11 @@ async def chat_endpoint(
     System prompt is fixed; ensure LM Studio is running at LM_STUDIO_URI (default http://localhost:1234/v1).
     """
     try:
-        messages_dicts = [{"role": m.role, "content": m.content} for m in body.messages]
-        reply, model = await chat_service.chat(messages_dicts)
-        return ChatResponse(reply=reply, model=model)
+        messages = [
+            ChatMessage(role=m.role, content=m.content) for m in body.messages
+        ]
+        reply = await chat_service.chat(messages)
+        return ChatResponse(reply=reply)
     except MitreDBError as e:
         raise HTTPException(
             status_code=503,

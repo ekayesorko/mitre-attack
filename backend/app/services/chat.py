@@ -5,6 +5,7 @@ import logging
 
 from app.config import settings
 from app.services.messages import get_last_user_content, to_langchain_messages
+from app.services.models import ChatMessage
 from app.services.protocols import LLMService, RetrievalService
 
 logger = logging.getLogger(__name__)
@@ -30,19 +31,20 @@ class RagChatService:
         self._llm = llm
         self._rag_top_k = rag_top_k if rag_top_k is not None else settings.rag_top_k
 
-    async def chat(self, messages: list[dict[str, str]]) -> tuple[str, str]:
-        last_user = get_last_user_content(messages)
+    async def chat(self, messages: list[ChatMessage]) -> str:
+        last_user_msg = get_last_user_content(messages)
         try:
             rag_context = await self._retrieval.get_context(
-                last_user, top_k=self._rag_top_k
+                last_user_msg, top_k=self._rag_top_k
             )
         except Exception as e:
             logger.warning("RAG failed, continuing without context: %s", e)
             rag_context = ""
         if not rag_context.strip():
-            logger.info("Chat using no RAG context (query=%r)", last_user[:80] if last_user else "")
+            logger.info("Chat using no RAG context (query=%r)", last_user_msg[:80] if last_user_msg else "")
         system_content = SYSTEM_MESSAGE
         if rag_context.strip():
             system_content += "\n\nRelevant entities:\n" + rag_context.strip()
         lc_messages = to_langchain_messages(messages, system_content)
-        return await self._llm.invoke(lc_messages)
+        reply, _ = await self._llm.invoke(lc_messages)
+        return reply

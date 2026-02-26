@@ -5,6 +5,8 @@ from typing import Protocol, runtime_checkable
 
 from langchain_core.messages import BaseMessage
 
+from app.services.models import ChatMessage
+
 
 @runtime_checkable
 class EmbeddingService(Protocol):
@@ -41,6 +43,6 @@ class LLMService(Protocol):
 class ChatService(Protocol):
     """Abstraction for multi-turn chat with optional RAG."""
 
-    async def chat(self, messages: list[dict[str, str]]) -> tuple[str, str]:
-        """Run chat; returns (reply, model_name)."""
+    async def chat(self, messages: list[ChatMessage]) -> str:
+        """Run chat; returns the assistant reply."""
         ...
