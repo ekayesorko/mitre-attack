@@ -30,7 +30,7 @@ class Settings:
         self.mitre_content_url = f"{base}/api/mitre/"
 
     def mitre_download_url(self, version: str) -> str:
-        return f"{self.api_base}/api/mitre/{version}/download"
+        return f"{self.api_base}/api/mitre/{version}"
 
 
 # Single instance loaded at import
