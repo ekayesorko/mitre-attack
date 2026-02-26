@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 
@@ -16,6 +18,15 @@ from app.schemas.mitre import (
 from app.services.protocols import MitreWriteService
 
 router = APIRouter()
+
+
+def _bundle_to_json_source_shape(content: MitreBundle) -> str:
+    """Serialize bundle to JSON matching source document shape: no null keys, recursive exclude_none."""
+    data = content.model_dump(mode="json", exclude_none=True)
+    data["objects"] = [
+        o.model_dump(mode="json", exclude_none=True) for o in content.objects
+    ]
+    return json.dumps(data, indent=2)
 
 
 def _make_metadata(x_mitre_version: str, content: MitreBundle) -> MitreMetadata:
@@ -105,7 +116,7 @@ async def download_mitre_version_endpoint(
             detail=f"MITRE version '{x_mitre_version}' not found.",
         )
     content, _ = result
-    body = content.model_dump_json(indent=2)
+    body = _bundle_to_json_source_shape(content)
     filename = f"mitre-{x_mitre_version}.json"
     return Response(
         content=body,

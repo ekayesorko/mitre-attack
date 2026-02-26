@@ -41,8 +41,14 @@ class MitreExternalReference(BaseModel):
 
 class MitreKillChainPhase(BaseModel):
     """Kill chain phase reference."""
-    phase_name: str = Field(..., description="Phase name")
     kill_chain_name: str = Field(..., description="Kill chain name")
+    phase_name: str = Field(..., description="Phase name")
+
+
+class MitreContentsEntry(BaseModel):
+    """Single entry in x_mitre_contents (x-mitre-collection)."""
+    object_ref: str = Field(..., description="STIX object ID reference")
+    object_modified: str = Field(..., description="ISO 8601 modification timestamp")
 
 
 class MitreObject(BaseModel):
@@ -62,9 +68,12 @@ class MitreObject(BaseModel):
     x_mitre_deprecated: bool | None = Field(default=None)
     x_mitre_domains: list[str] | None = Field(default=None)
     x_mitre_platforms: list[str] | None = Field(default=None)
+    x_mitre_data_sources: list[str] | None = Field(default=None)
+    x_mitre_permissions_required: list[str] | None = Field(default=None)
     x_mitre_contributors: list[str] | None = Field(default=None)
     x_mitre_attack_spec_version: str | None = Field(default=None)
     x_mitre_shortname: str | None = Field(default=None)
+    x_mitre_contents: list[MitreContentsEntry] | None = Field(default=None)
     kill_chain_phases: list[MitreKillChainPhase] | None = Field(default=None)
     aliases: list[str] | None = Field(default=None)
     object_marking_refs: list[str] | None = Field(default=None)
