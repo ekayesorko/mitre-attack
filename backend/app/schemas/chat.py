@@ -1,16 +1,18 @@
 """Chat API request/response schemas for LM Studio chatbot."""
+from __future__ import annotations
+
+from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
-class ChatMessage(BaseModel):
-    """A single message in a conversation."""
+@dataclass(frozen=True)
+class ChatMessage:
+    """A single message in a conversation (dataclass for internal use)."""
 
-    role: Literal["user", "assistant", "system"] = Field(
-        ..., description="Who sent this message (user, assistant, or system)"
-    )
-    content: str = Field(..., description="Message content")
+    role: Literal["user", "assistant", "system"]
+    content: str
 
 
 class ChatRequest(BaseModel):

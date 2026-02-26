@@ -15,6 +15,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from app.config import settings
+from app.schemas.db import EntitySearchResult, MitreEntityDoc, MitreVersionEntry
 from app.schemas.mitre import MitreBundle, MitreMetadata, MitreObject
 
 logger = logging.getLogger(__name__)
@@ -115,10 +116,10 @@ class MongoDBRepo:
         except PyMongoError as e:
             raise MitreDBError(f"Failed to get MITRE version: {e}") from e
 
-    async def list_mitre_versions(self) -> list[dict]:
+    async def list_mitre_versions(self) -> list[MitreVersionEntry]:
         """
         Return all available MITRE versions from mitre_documents.
-        Each item has x_mitre_version (_id) and metadata (MitreMetadata fields).
+        Each item has x_mitre_version (_id) and metadata (MitreMetadata).
         """
         try:
             collection = self._db[COLLECTION_DOCUMENTS]
@@ -128,10 +129,10 @@ class MongoDBRepo:
             ).sort("metadata.last_modified", -1)
             docs = await cursor.to_list(length=None)
             return [
-                {
-                    "x_mitre_version": doc["_id"],
-                    "metadata": doc.get("metadata", {}),
-                }
+                MitreVersionEntry(
+                    x_mitre_version=doc["_id"],
+                    metadata=MitreMetadata.model_validate(doc.get("metadata", {})),
+                )
                 for doc in docs
             ]
         except PyMongoError as e:
@@ -194,11 +195,10 @@ class MongoDBRepo:
         self,
         query_embedding: list[float],
         top_k: int = 5,
-    ) -> list[dict]:
+    ) -> list[EntitySearchResult]:
         """
         Return top_k MITRE entities most similar to query_embedding using MongoDB Atlas $vectorSearch.
         Requires a vector search index on the collection (path: embedding, cosine similarity).
-        Each returned dict has entity fields (type, name, description, etc.), no embedding, plus _score.
         """
         if not query_embedding or top_k <= 0:
             return []
@@ -235,12 +235,22 @@ class MongoDBRepo:
             raise MitreDBError(
                 f"Vector search failed (is Atlas vector index '{settings.vector_search_index_name}' defined?): {e}"
             ) from e
-        return list(docs)
+        return [
+            EntitySearchResult(
+                id=doc.get("id") or doc.get("_id", ""),
+                type=doc.get("type"),
+                name=doc.get("name"),
+                description=doc.get("description"),
+                x_mitre_shortname=doc.get("x_mitre_shortname"),
+                score=float(doc.get("_score", 0.0)),
+            )
+            for doc in docs
+        ]
 
-    async def search_entities_by_text(self, query: str, top_k: int = 10) -> list[dict]:
+    async def search_entities_by_text(self, query: str, top_k: int = 10) -> list[EntitySearchResult]:
         """
         Match query as case-insensitive substring in name only.
-        Excludes relationships. Returns same shape as vector search (id, type, name, x_mitre_shortname, _score=1.0).
+        Excludes relationships. Returns same shape as vector search (id, type, name, x_mitre_shortname, score=1.0).
         """
         query = (query or "").strip()
         if not query or top_k <= 0:
@@ -256,9 +266,17 @@ class MongoDBRepo:
                 {"_id": 1, "id": 1, "type": 1, "name": 1, "description": 1, "x_mitre_shortname": 1},
             ).limit(top_k)
             docs = await cursor.to_list(length=top_k)
-            for d in docs:
-                d["_score"] = 1.0
-            return docs
+            return [
+                EntitySearchResult(
+                    id=doc.get("id") or doc.get("_id", ""),
+                    type=doc.get("type"),
+                    name=doc.get("name"),
+                    description=doc.get("description"),
+                    x_mitre_shortname=doc.get("x_mitre_shortname"),
+                    score=1.0,
+                )
+                for doc in docs
+            ]
         except PyMongoError as e:
             raise MitreDBError(f"Text search failed: {e}") from e
 
@@ -267,7 +285,7 @@ class MongoDBRepo:
         x_mitre_version: str,
         content: MitreBundle,
         metadata: MitreMetadata,
-        entity_docs: list[dict],
+        entity_docs: list[MitreEntityDoc],
     ) -> None:
         """
         Store MITRE data in three collections:
@@ -291,7 +309,7 @@ class MongoDBRepo:
 
             await entities_collection.delete_many({})
             if entity_docs:
-                await entities_collection.insert_many(entity_docs)
+                await entities_collection.insert_many([ed.to_mongo_doc() for ed in entity_docs])
 
             await schema_collection.replace_one(
                 {"_id": CURRENT_DOC_ID},
@@ -306,7 +324,7 @@ class MongoDBRepo:
         x_mitre_version: str,
         content: MitreBundle,
         metadata: MitreMetadata,
-        entity_docs: list[dict],
+        entity_docs: list[MitreEntityDoc],
     ) -> None:
         """Insert new MITRE document and entity_docs (pre-built with embeddings by caller)."""
         docs_collection = self._db[COLLECTION_DOCUMENTS]
@@ -332,7 +350,7 @@ class MongoDBRepo:
         try:
             await entities_collection.delete_many({})
             if entity_docs:
-                await entities_collection.insert_many(entity_docs)
+                await entities_collection.insert_many([ed.to_mongo_doc() for ed in entity_docs])
 
             await schema_collection.replace_one(
                 {"_id": CURRENT_DOC_ID},

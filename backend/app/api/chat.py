@@ -5,7 +5,7 @@ from app.dependencies import get_chat_service
 from app.db.mongo import MitreDBError
 from app.exceptions import LLMUnavailableError, ServiceError
 from app.schemas.chat import ChatRequest, ChatResponse
-from app.services.models import ChatMessage
+from app.schemas.chat import ChatMessage
 from app.services.protocols import ChatService
 
 router = APIRouter()

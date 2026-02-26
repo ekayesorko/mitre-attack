@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 
 from app.db.mongo import DuplicateVersionError, MongoDBRepo, MitreDBError
+from app.schemas.db import MitreVersionEntry
 from app.dependencies import get_mitre_db, get_mitre_write_service
 from app.schemas.mitre import (
     MitreBundle,
@@ -56,13 +57,13 @@ async def list_mitre_versions_endpoint(
     Returns version id and metadata for each; newest first by last_modified.
     """
     try:
-        raw = await mitre_db.list_mitre_versions()
+        raw: list[MitreVersionEntry] = await mitre_db.list_mitre_versions()
     except (MitreDBError, RuntimeError) as e:
         _handle_db_error(e)
     items = [
         MitreVersionInfo(
-            x_mitre_version=v["x_mitre_version"],
-            metadata=MitreMetadata(**v["metadata"]),
+            x_mitre_version=v.x_mitre_version,
+            metadata=v.metadata,
         )
         for v in raw
     ]

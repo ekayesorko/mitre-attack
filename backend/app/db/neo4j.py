@@ -5,6 +5,7 @@ import re
 from neo4j import AsyncGraphDatabase
 
 from app.config import settings
+from app.schemas.db import GraphRecord
 from app.schemas.mitre import MitreBundle, MitreObject
 
 logger = logging.getLogger(__name__)
@@ -155,9 +156,9 @@ class Neo4jRepo:
         self,
         stix_id: str,
         limit: int | None = None,
-    ) -> list[dict] | None:
+    ) -> list[GraphRecord] | None:
         """
-        Return list of records { "a": Node, "r": Relationship, "b": Node } for edges incident to the given stix_id.
+        Return list of GraphRecord (a, r, b) for edges incident to the given stix_id.
         Returns None if driver unavailable.
         """
         if self._driver is None:
@@ -169,8 +170,10 @@ class Neo4jRepo:
                 stix_id=stix_id,
                 limit=capped_limit,
             )
-            records = [{"a": rec["a"], "r": rec["r"], "b": rec["b"]} async for rec in result]
-        return records
+            return [
+                GraphRecord(a=rec["a"], r=rec["r"], b=rec["b"])
+                async for rec in result
+            ]
 
 
 async def init_neo4j() -> Neo4jRepo:

@@ -5,6 +5,7 @@ import logging
 
 from app.db.mongo import MongoDBRepo
 from app.db.neo4j import Neo4jRepo
+from app.schemas.db import MitreEntityDoc
 from app.schemas.mitre import MitreBundle, MitreMetadata
 from app.services.protocols import EmbeddingService
 from app.utils.entity_text import entity_text_for_embedding
@@ -15,12 +16,12 @@ logger = logging.getLogger(__name__)
 async def _build_entity_docs_with_embeddings(
     content: MitreBundle,
     embedding_service: EmbeddingService,
-) -> list[dict]:
+) -> list[MitreEntityDoc]:
     """Build entity documents with embedding field for name+description."""
-    entity_docs = []
-    docs_with_text = []
+    entity_docs: list[MitreEntityDoc] = []
+    docs_with_text: list[tuple[MitreEntityDoc, str]] = []
     for obj in content.objects:
-        doc = {"_id": obj.id, **obj.model_dump(mode="json")}
+        doc = MitreEntityDoc(entity=obj, embedding=None)
         entity_docs.append(doc)
         text = entity_text_for_embedding(obj.name, obj.description)
         if text:
@@ -29,7 +30,9 @@ async def _build_entity_docs_with_embeddings(
         texts = [t for _, t in docs_with_text]
         embeddings = await embedding_service.embed_texts_batch(texts)
         for (doc, _), vec in zip(docs_with_text, embeddings):
-            doc["embedding"] = vec
+            # Replace with a new doc that has embedding set (MitreEntityDoc is not frozen)
+            idx = entity_docs.index(doc)
+            entity_docs[idx] = MitreEntityDoc(entity=doc.entity, embedding=vec)
     return entity_docs
 
 

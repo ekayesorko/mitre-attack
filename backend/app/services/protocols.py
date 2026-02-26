@@ -6,7 +6,7 @@ from typing import Protocol, runtime_checkable
 from langchain_core.messages import BaseMessage
 
 from app.schemas.mitre import MitreBundle, MitreMetadata
-from app.services.models import ChatMessage
+from app.schemas.chat import ChatMessage
 
 
 @runtime_checkable

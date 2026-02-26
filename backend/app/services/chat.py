@@ -5,7 +5,7 @@ import logging
 
 from app.config import settings
 from app.services.messages import get_last_user_content, to_langchain_messages
-from app.services.models import ChatMessage
+from app.schemas.chat import ChatMessage
 from app.services.protocols import LLMService, RetrievalService
 
 logger = logging.getLogger(__name__)

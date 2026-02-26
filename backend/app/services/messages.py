@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from app.services.models import ChatMessage
+from app.schemas.chat import ChatMessage
 
 
 def get_last_user_content(messages: list[ChatMessage]) -> str:
