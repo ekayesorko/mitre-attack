@@ -1,34 +1,31 @@
 """Chat API request/response schemas for LM Studio chatbot."""
+from __future__ import annotations
+
+from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
-class ChatMessage(BaseModel):
-    """A single message in a conversation."""
+@dataclass(frozen=True)
+class ChatMessage:
+    """A single message in a conversation (dataclass for internal use)."""
 
-    role: Literal["user", "assistant", "system"] = Field(
-        ..., description="Who sent this message (user, assistant, or system)"
-    )
-    content: str = Field(..., description="Message content")
+    role: Literal["user", "assistant", "system"]
+    content: str
 
 
 class ChatRequest(BaseModel):
-    """Multi-turn chat request: full conversation plus optional system prompt."""
+    """Multi-turn chat request: full conversation history."""
 
     messages: list[ChatMessage] = Field(
         ...,
         min_length=1,
         description="Conversation history. Last message should be from the user.",
     )
-    system: str | None = Field(
-        None,
-        description="Optional system prompt (prepended before messages).",
-    )
 
 
 class ChatResponse(BaseModel):
-    """Chat completion response from LM Studio (google/gemma-3-4b)."""
+    """Chat completion response."""
 
     reply: str = Field(..., description="Assistant reply text")
-    model: str = Field(..., description="Model used (e.g. google/gemma-3-4b)")

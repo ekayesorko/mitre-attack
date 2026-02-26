@@ -3,10 +3,13 @@ from __future__ import annotations
 
 from fastapi import Request
 
+from app.db.mongo import MongoDBRepo
+from app.db.neo4j import Neo4jRepo
 from app.services.protocols import (
     ChatService,
     EmbeddingService,
     LLMService,
+    MitreWriteService,
     RetrievalService,
 )
 
@@ -25,3 +28,15 @@ def get_retrieval_service(request: Request) -> RetrievalService:
 
 def get_chat_service(request: Request) -> ChatService:
     return request.app.state.chat_service
+
+
+def get_mitre_db(request: Request) -> MongoDBRepo:
+    return request.app.state.mitre_db
+
+
+def get_mitre_write_service(request: Request) -> MitreWriteService:
+    return request.app.state.mitre_write_service
+
+
+def get_neo4j_repo(request: Request) -> Neo4jRepo:
+    return request.app.state.neo4j_repo

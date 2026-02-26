@@ -1,12 +1,13 @@
 """Neo4j storage for MITRE/STIX data. Syncs bundle objects as nodes and relationship objects as edges."""
-import re
-from neo4j import AsyncGraphDatabase
 import logging
-from app.config import settings
+import re
 
+from neo4j import AsyncGraphDatabase
+
+from app.config import settings
+from app.schemas.db import GraphRecord
 from app.schemas.mitre import MitreBundle, MitreObject
 
-_driver = None
 logger = logging.getLogger(__name__)
 
 # Batch size for chunked deletes (CALL { ... } IN TRANSACTIONS)
@@ -82,101 +83,134 @@ async def _ensure_stix_id_constraint(tx) -> None:
     )
 
 
-async def init_neo4j() -> None:
-    """Connect to Neo4j. Call once at app startup."""
-    global _driver
+# Cypher: (a)-[r]->(b) where a or b has the given stix_id; returns raw a, r, b for graphviz. LIMIT caps supernodes.
+_USES_INTO_CYPHER = """
+MATCH (a)-[r:USES]->(b)
+WHERE b.stix_id = $stix_id OR a.stix_id = $stix_id
+RETURN a, r, b
+LIMIT $limit
+"""
+
+
+class Neo4jRepo:
+    """Neo4j graph repository for MITRE bundles. Injected via app.state (see dependencies.get_neo4j_repo)."""
+
+    def __init__(self, driver) -> None:
+        self._driver = driver
+
+    async def close(self) -> None:
+        """Close the Neo4j driver. Call at app shutdown."""
+        if self._driver is not None:
+            await self._driver.close()
+            self._driver = None
+            logger.info("Neo4j connection closed")
+
+    async def store_mitre_bundle(self, content: MitreBundle) -> None:
+        """
+        Replace MITRE graph in Neo4j with the given bundle.
+        - Non-relationship objects become nodes (labeled by type + MitreEntity).
+        - Relationship objects become edges between nodes identified by source_ref/target_ref.
+        """
+        if self._driver is None:
+            logger.error("Neo4j not available, skipping graph sync")
+            return
+
+        by_id: dict[str, MitreObject] = {obj.id: obj for obj in content.objects}
+        nodes = [o for o in content.objects if o.type != "relationship"]
+        relationships = [o for o in content.objects if o.type == "relationship"]
+
+        nodes_by_label: dict[str, list[dict]] = {}
+        for obj in nodes:
+            label = _stix_type_to_label(obj.type)
+            nodes_by_label.setdefault(label, []).append(_node_properties(obj))
+
+        rel_rows: list[dict] = []
+        for rel in relationships:
+            if not rel.source_ref or not rel.target_ref or not rel.relationship_type:
+                continue
+            if rel.source_ref not in by_id or rel.target_ref not in by_id:
+                continue
+            rel_rows.append({
+                "source_ref": rel.source_ref,
+                "target_ref": rel.target_ref,
+                "rel_type": _relationship_type_to_neo4j(rel.relationship_type),
+                "rel_id": rel.id,
+            })
+
+        async with self._driver.session() as session:
+            await session.execute_write(_clear_mitre_graph)
+            for label, rows in nodes_by_label.items():
+                for chunk in _chunked(rows, _CREATE_BATCH_SIZE):
+                    await session.execute_write(_create_nodes_batch, label, chunk)
+            rel_rows_by_type: dict[str, list[dict]] = {}
+            for row in rel_rows:
+                t = row["rel_type"].replace(" ", "_")
+                rel_rows_by_type.setdefault(t, []).append(row)
+            for rel_type, rows in rel_rows_by_type.items():
+                for chunk in _chunked(rows, _CREATE_BATCH_SIZE):
+                    await session.execute_write(_create_relationships_batch, rel_type, chunk)
+
+        logger.info("Neo4j: stored %s nodes and %s relationships", len(nodes), len(rel_rows))
+
+    async def get_uses_into_records(
+        self,
+        stix_id: str,
+        limit: int | None = None,
+    ) -> list[GraphRecord] | None:
+        """
+        Return list of GraphRecord (a, r, b) for edges incident to the given stix_id.
+        Returns None if driver unavailable.
+        """
+        if self._driver is None:
+            return None
+        capped_limit = min(limit or _GRAPH_QUERY_LIMIT, _GRAPH_QUERY_LIMIT)
+        async with self._driver.session() as session:
+            result = await session.run(
+                _USES_INTO_CYPHER,
+                stix_id=stix_id,
+                limit=capped_limit,
+            )
+            return [
+                GraphRecord(a=rec["a"], r=rec["r"], b=rec["b"])
+                async for rec in result
+            ]
+
+
+async def init_neo4j() -> Neo4jRepo:
+    """Connect to Neo4j and return Neo4jRepo. Store in app.state for dependency injection."""
+    driver = None
     try:
-        _driver = AsyncGraphDatabase.driver(
+        driver = AsyncGraphDatabase.driver(
             settings.neo4j_uri, auth=(settings.neo4j_user, settings.neo4j_password)
         )
-        await _driver.verify_connectivity()
-        async with _driver.session() as session:
+        await driver.verify_connectivity()
+        async with driver.session() as session:
             await session.execute_write(_ensure_stix_id_constraint)
         logger.info("Neo4j connected")
+        return Neo4jRepo(driver)
     except Exception as e:
-        _driver = None
+        if driver is not None:
+            try:
+                await driver.close()
+            except Exception:
+                pass
         logger.error("Neo4j connection failed (MITRE graph storage will be skipped): %s", e)
+        return Neo4jRepo(None)
 
 
-async def close_neo4j() -> None:
-    """Close Neo4j driver. Call at app shutdown."""
-    global _driver
-    if _driver is not None:
-        await _driver.close()
-        _driver = None
-        logger.info("Neo4j connection closed")
-
-
-def _get_driver():
-    if _driver is None:
-        return None
-    return _driver
-
-
-async def store_mitre_bundle(content: MitreBundle) -> None:
-    """
-    Replace MITRE graph in Neo4j with the given bundle.
-    - Non-relationship objects become nodes (labeled by type + MitreEntity).
-    - Relationship objects become edges between nodes identified by source_ref/target_ref.
-    """
-    driver = _get_driver()
-    if driver is None:
-        logger.error("Neo4j not available, skipping graph sync")
-        return
-
-    # Id -> object for lookups
-    by_id: dict[str, MitreObject] = {obj.id: obj for obj in content.objects}
-
-    nodes = [o for o in content.objects if o.type != "relationship"]
-    relationships = [o for o in content.objects if o.type == "relationship"]
-
-    # Group nodes by label for batch UNWIND (one tx per label)
-    nodes_by_label: dict[str, list[dict]] = {}
-    for obj in nodes:
-        label = _stix_type_to_label(obj.type)
-        nodes_by_label.setdefault(label, []).append(_node_properties(obj))
-
-    # Build list of relationship rows (source_ref, target_ref, rel_type, rel_id)
-    rel_rows: list[dict] = []
-    for rel in relationships:
-        if not rel.source_ref or not rel.target_ref or not rel.relationship_type:
-            continue
-        if rel.source_ref not in by_id or rel.target_ref not in by_id:
-            continue
-        rel_rows.append({
-            "source_ref": rel.source_ref,
-            "target_ref": rel.target_ref,
-            "rel_type": _relationship_type_to_neo4j(rel.relationship_type),
-            "rel_id": rel.id,
-        })
-
-    async with driver.session() as session:
-        # Clear existing MITRE nodes (and their relationships)
-        await session.execute_write(_clear_mitre_graph)
-
-        # Batch create nodes: chunked UNWIND per label (multiple tx per label if large)
-        for label, rows in nodes_by_label.items():
-            for chunk in _chunked(rows, _CREATE_BATCH_SIZE):
-                await session.execute_write(_create_nodes_batch, label, chunk)
-
-        # Batch create relationships: chunked UNWIND per type (multiple tx per type if large)
-        rel_rows_by_type: dict[str, list[dict]] = {}
-        for row in rel_rows:
-            t = row["rel_type"].replace(" ", "_")
-            rel_rows_by_type.setdefault(t, []).append(row)
-        for rel_type, rows in rel_rows_by_type.items():
-            for chunk in _chunked(rows, _CREATE_BATCH_SIZE):
-                await session.execute_write(_create_relationships_batch, rel_type, chunk)
-
-    logger.info("Neo4j: stored %s nodes and %s relationships", len(nodes), len(rel_rows))
+async def close_neo4j(repo: Neo4jRepo) -> None:
+    """Close Neo4j. Call at app shutdown with repo from app.state."""
+    await repo.close()
 
 
 async def _clear_mitre_graph(tx, batch_size: int = _DELETE_BATCH_SIZE) -> None:
     """Delete all MitreEntity nodes and their relationships in batched transactions."""
-    # Stream nodes and delete in chunks to avoid a single huge transaction
+    # Stream nodes and delete in chunks to avoid a single huge transaction.
+    # Outer RETURN required: Neo4j does not allow a query to conclude with CALL.
     cypher = (
         "MATCH (n:MitreEntity) "
-        "CALL { WITH n DETACH DELETE n RETURN 1 AS _ } IN TRANSACTIONS OF $batch_size ROWS"
+        "CALL { WITH n DETACH DELETE n RETURN 1 AS _ } IN TRANSACTIONS OF $batch_size ROWS "
+        "RETURN count(*) AS _"
     )
     await tx.run(cypher, batch_size=batch_size)
 
@@ -204,36 +238,3 @@ async def _create_relationships_batch(tx, rel_type: str, rows: list[dict]) -> No
         f"MERGE (a)-[r:{rel_type} {{stix_id: row.rel_id}}]->(b)"
     )
     await tx.run(cypher, rows=rows)
-
-
-# Cypher: (a)-[r]->(b) where a or b has the given stix_id; returns raw a, r, b for graphviz. LIMIT caps supernodes.
-_USES_INTO_CYPHER = """
-MATCH (a)-[r]->(b)
-WHERE b.stix_id = $stix_id OR a.stix_id = $stix_id
-RETURN a, r, b
-LIMIT $limit
-"""
-
-
-async def get_uses_into_records(
-    stix_id: str,
-    limit: int | None = None,
-) -> list[dict] | None:
-    """
-    Return list of records { "a": Node, "r": Relationship, "b": Node } for edges incident to the given stix_id.
-    For use with graphviz (raw Neo4j objects). Returns None if driver unavailable.
-    Result count is capped to avoid supernodes overwhelming the UI.
-    """
-    driver = _get_driver()
-    if driver is None:
-        return None
-
-    capped_limit = min(limit or _GRAPH_QUERY_LIMIT, _GRAPH_QUERY_LIMIT)
-    async with driver.session() as session:
-        result = await session.run(
-            _USES_INTO_CYPHER,
-            stix_id=stix_id,
-            limit=capped_limit,
-        )
-        records = [{"a": rec["a"], "r": rec["r"], "b": rec["b"]} async for rec in result]
-    return records

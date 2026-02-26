@@ -5,6 +5,32 @@ from typing import Protocol, runtime_checkable
 
 from langchain_core.messages import BaseMessage
 
+from app.schemas.mitre import MitreBundle, MitreMetadata
+from app.schemas.chat import ChatMessage
+
+
+@runtime_checkable
+class MitreWriteService(Protocol):
+    """Orchestrator for MITRE write operations: embedding + persistence."""
+
+    async def put_document(
+        self,
+        x_mitre_version: str,
+        content: MitreBundle,
+        metadata: MitreMetadata,
+    ) -> None:
+        """Store or replace MITRE document and entities (with embeddings), set current version."""
+        ...
+
+    async def insert_document(
+        self,
+        x_mitre_version: str,
+        content: MitreBundle,
+        metadata: MitreMetadata,
+    ) -> None:
+        """Insert new MITRE document and entities (with embeddings); raises if version exists."""
+        ...
+
 
 @runtime_checkable
 class EmbeddingService(Protocol):
@@ -41,10 +67,6 @@ class LLMService(Protocol):
 class ChatService(Protocol):
     """Abstraction for multi-turn chat with optional RAG."""
 
-    async def chat(
-        self,
-        messages: list[dict[str, str]],
-        system: str | None = None,
-    ) -> tuple[str, str]:
-        """Run chat; returns (reply, model_name)."""
+    async def chat(self, messages: list[ChatMessage]) -> str:
+        """Run chat; returns the assistant reply."""
         ...

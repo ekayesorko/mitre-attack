@@ -2,33 +2,24 @@
 from app.db.mongo import (
     DuplicateVersionError,
     MitreDBError,
-    close_db,
-    get_mitre_content,
-    get_mitre_content_by_version,
-    get_mitre_version,
-    init_db,
-    insert_mitre_document,
-    list_mitre_versions,
-    put_mitre_document,
-    search_entities_by_embedding,
-    search_entities_by_text,
+    MongoDBRepo,
+    close_mongo_db,
+    init_mongo_db,
 )
-from app.db.neo4j import close_neo4j, init_neo4j, store_mitre_bundle
+from app.db.neo4j import Neo4jRepo, close_neo4j, init_neo4j
+from app.schemas.db import EntitySearchResult, GraphRecord, MitreEntityDoc, MitreVersionEntry
 
 __all__ = [
     "DuplicateVersionError",
+    "EntitySearchResult",
+    "GraphRecord",
     "MitreDBError",
-    "close_db",
+    "MitreEntityDoc",
+    "MongoDBRepo",
+    "MitreVersionEntry",
+    "close_mongo_db",
     "close_neo4j",
-    "get_mitre_content",
-    "get_mitre_content_by_version",
-    "get_mitre_version",
-    "init_db",
+    "init_mongo_db",
     "init_neo4j",
-    "insert_mitre_document",
-    "list_mitre_versions",
-    "put_mitre_document",
-    "search_entities_by_embedding",
-    "search_entities_by_text",
-    "store_mitre_bundle",
+    "Neo4jRepo",
 ]

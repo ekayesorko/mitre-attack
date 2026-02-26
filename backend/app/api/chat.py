@@ -5,6 +5,7 @@ from app.dependencies import get_chat_service
 from app.db.mongo import MitreDBError
 from app.exceptions import LLMUnavailableError, ServiceError
 from app.schemas.chat import ChatRequest, ChatResponse
+from app.schemas.chat import ChatMessage
 from app.services.protocols import ChatService
 
 router = APIRouter()
@@ -17,13 +18,15 @@ async def chat_endpoint(
 ) -> ChatResponse:
     """
     Multi-turn chat with the chatbot (LM Studio, google/gemma-3-4b).
-    Send `messages` (conversation history; last message should be from the user) and optional `system` prompt.
-    Ensure LM Studio is running with the model loaded at LM_STUDIO_URI (default http://localhost:1234/v1).
+    Send `messages` (conversation history; last message should be from the user).
+    System prompt is fixed; ensure LM Studio is running at LM_STUDIO_URI (default http://localhost:1234/v1).
     """
     try:
-        messages_dicts = [{"role": m.role, "content": m.content} for m in body.messages]
-        reply, model = await chat_service.chat(messages_dicts, body.system)
-        return ChatResponse(reply=reply, model=model)
+        messages = [
+            ChatMessage(role=m.role, content=m.content) for m in body.messages
+        ]
+        reply = await chat_service.chat(messages)
+        return ChatResponse(reply=reply)
     except MitreDBError as e:
         raise HTTPException(
             status_code=503,
