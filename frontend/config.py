@@ -29,8 +29,11 @@ class Settings:
         self.mitre_list_url = f"{base}/api/mitre/list"
         self.mitre_content_url = f"{base}/api/mitre/"
 
-    def mitre_download_url(self, version: str) -> str:
-        return f"{self.api_base}/api/mitre/{version}"
+    def mitre_download_url(self, version: str | None = None) -> str:
+        url = f"{self.api_base}/api/mitre"
+        if version and version.strip():
+            return f"{url}?version={version.strip()}"
+        return url
 
 
 # Single instance loaded at import

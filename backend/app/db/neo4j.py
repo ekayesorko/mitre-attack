@@ -85,7 +85,7 @@ async def _ensure_stix_id_constraint(tx) -> None:
 
 # Cypher: (a)-[r]->(b) where a or b has the given stix_id; returns raw a, r, b for graphviz. LIMIT caps supernodes.
 _USES_INTO_CYPHER = """
-MATCH (a)-[r]->(b)
+MATCH (a)-[r:USES]->(b)
 WHERE b.stix_id = $stix_id OR a.stix_id = $stix_id
 RETURN a, r, b
 LIMIT $limit
