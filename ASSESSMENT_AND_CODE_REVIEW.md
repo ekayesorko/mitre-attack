@@ -120,6 +120,8 @@ Router is mounted in `backend/app/main.py` with `prefix="/api/mitre"`, so full p
 
 ## 6. Quick Verification Commands
 
+**Before running these:** Ensure the backend port is accessible. If using Docker Compose with the backend port not exposed, either expose it in `docker-compose.yaml` (e.g. `ports: ["8000:8000"]` for the backend service) or run the backend locally so that `http://localhost:8000` is reachable. The frontend proxy and the commands below need to reach the backend.
+
 ```bash
 # Start stack
 docker compose up --build -d
