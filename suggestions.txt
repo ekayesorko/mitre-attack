@@ -1,5 +1,5 @@
 - create the services and repo when needed. not at application startup
-- divide get api into two function with or without version 
+- divide get api into two function with or without version  DONE
 - mitre.py 176 line: direct access with index without availability checking
 - store mitre data in neo4j use two different function for storing nodes and edges
 - read _ vs __ and dunder method
