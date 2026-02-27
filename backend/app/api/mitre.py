@@ -97,6 +97,32 @@ async def get_mitre_version_endpoint(
     return MitreVersionResponse(x_mitre_version=version)
 
 
+async def _get_mitre_content_latest(mitre_db: MongoDBRepo) -> tuple[str, MitreBundle]:
+    """Fetch the latest MITRE version content. Raises HTTPException on error or if no data."""
+    x_mitre_version = await mitre_db.get_mitre_version()
+    if x_mitre_version is None:
+        raise HTTPException(status_code=404, detail="No MITRE data loaded yet.")
+    result = await mitre_db.get_mitre_content_by_version(x_mitre_version)
+    if result is None:
+        raise HTTPException(status_code=404, detail="No MITRE data loaded yet.")
+    content, _ = result
+    return x_mitre_version, content
+
+
+async def _get_mitre_content_by_version(
+    mitre_db: MongoDBRepo, version: str
+) -> tuple[str, MitreBundle]:
+    """Fetch MITRE content for a specific version. Raises HTTPException if not found."""
+    result = await mitre_db.get_mitre_content_by_version(version)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"MITRE version not found: {version}",
+        )
+    content, _ = result
+    return version, content
+
+
 ##2.2 2.5
 @router.get("/")
 async def download_mitre_version_endpoint(
@@ -105,30 +131,19 @@ async def download_mitre_version_endpoint(
 ) -> Response:
     """
     Return MITRE bundle for the given version as a downloadable JSON file.
-    Use query param 'version'. If version is omitted or not found, returns the latest version.
+    Use query param 'version'. If version is omitted, returns the latest version.
     """
-    x_mitre_version = version
-    if x_mitre_version:
-        try:
-            result = await mitre_db.get_mitre_content_by_version(x_mitre_version)
-        except (MitreDBError, RuntimeError) as e:
-            _handle_db_error(e)
-        if result is None:
-            x_mitre_version = None
-    if not x_mitre_version:
-        try:
-            x_mitre_version = await mitre_db.get_mitre_version()
-        except (MitreDBError, RuntimeError) as e:
-            _handle_db_error(e)
-        if x_mitre_version is None:
-            raise HTTPException(status_code=404, detail="No MITRE data loaded yet.")
-        try:
-            result = await mitre_db.get_mitre_content_by_version(x_mitre_version)
-        except (MitreDBError, RuntimeError) as e:
-            _handle_db_error(e)
-        if result is None:
-            raise HTTPException(status_code=404, detail="No MITRE data loaded yet.")
-    content, _ = result
+    try:
+        if version:
+            x_mitre_version, content = await _get_mitre_content_by_version(
+                mitre_db, version
+            )
+        else:
+            x_mitre_version, content = await _get_mitre_content_latest(mitre_db)
+    except HTTPException:
+        raise
+    except (MitreDBError, RuntimeError) as e:
+        _handle_db_error(e)
     body = _bundle_to_json_source_shape(content)
     filename = f"mitre-{x_mitre_version}.json"
     return Response(
@@ -173,6 +188,11 @@ async def put_mitre(
     Accepts MITRE bundle as JSON; x_mitre_version is taken from the bundle's spec_version.
     Returns 409 if that version already exists.
     """
+    if len(body.objects) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="MITRE bundle must contain at least one object.",
+        )
     x_mitre_version = body.objects[0].x_mitre_version
     if x_mitre_version is None:
         raise HTTPException(

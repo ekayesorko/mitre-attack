@@ -3,13 +3,14 @@ from app.db.mongo import (
     DuplicateVersionError,
     MitreDBError,
     MongoDBRepo,
-    close_mongo_db,
-    init_mongo_db,
+    connect_mongo,
 )
-from app.db.neo4j import Neo4jRepo, close_neo4j, init_neo4j
+from app.db.neo4j import Neo4jRepo, connect_neo4j
 from app.schemas.db import EntitySearchResult, GraphRecord, MitreEntityDoc, MitreVersionEntry
 
 __all__ = [
+    "connect_mongo",
+    "connect_neo4j",
     "DuplicateVersionError",
     "EntitySearchResult",
     "GraphRecord",
@@ -17,9 +18,5 @@ __all__ = [
     "MitreEntityDoc",
     "MongoDBRepo",
     "MitreVersionEntry",
-    "close_mongo_db",
-    "close_neo4j",
-    "init_mongo_db",
-    "init_neo4j",
     "Neo4jRepo",
 ]

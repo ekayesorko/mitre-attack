@@ -1,6 +1,7 @@
 """Neo4j storage for MITRE/STIX data. Syncs bundle objects as nodes and relationship objects as edges."""
 import logging
 import re
+from contextlib import asynccontextmanager
 
 from neo4j import AsyncGraphDatabase
 
@@ -75,6 +76,44 @@ def _node_properties(obj: MitreObject) -> dict:
     return out
 
 
+def _preprocess_nodes(content: MitreBundle) -> dict[str, list[dict]]:
+    """
+    Split bundle objects into nodes (non-relationship) and return them grouped by Neo4j label.
+    Keys are PascalCase labels; values are lists of property dicts for MERGE.
+    """
+    nodes = [o for o in content.objects if o.type != "relationship"]
+    nodes_by_label: dict[str, list[dict]] = {}
+    for obj in nodes:
+        label = _stix_type_to_label(obj.type)
+        nodes_by_label.setdefault(label, []).append(_node_properties(obj))
+    return nodes_by_label
+
+
+def _preprocess_relationships(content: MitreBundle) -> list[dict]:
+    """
+    Split bundle objects into relationship rows for Neo4j.
+    Returns list of dicts with source_ref, target_ref, rel_type, rel_id; only includes
+    relationships whose source/target exist in the bundle.
+    """
+    by_id: dict[str, MitreObject] = {obj.id: obj for obj in content.objects}
+    relationships = [o for o in content.objects if o.type == "relationship"]
+    rel_rows: list[dict] = []
+    for rel in relationships:
+        if not rel.source_ref or not rel.target_ref or not rel.relationship_type:
+            continue
+        if rel.source_ref not in by_id or rel.target_ref not in by_id:
+            continue
+        rel_rows.append(
+            {
+                "source_ref": rel.source_ref,
+                "target_ref": rel.target_ref,
+                "rel_type": _relationship_type_to_neo4j(rel.relationship_type),
+                "rel_id": rel.id,
+            }
+        )
+    return rel_rows
+
+
 async def _ensure_stix_id_constraint(tx) -> None:
     """Create unique constraint on MitreEntity.stix_id so MERGE/MATCH use index (O(1)) instead of full scan."""
     await tx.run(
@@ -105,6 +144,31 @@ class Neo4jRepo:
             self._driver = None
             logger.info("Neo4j connection closed")
 
+    async def _store_nodes(
+        self,
+        session,
+        nodes_by_label: dict[str, list[dict]],
+    ) -> None:
+        """Store node batches grouped by label using the given session."""
+        for label, rows in nodes_by_label.items():
+            for chunk in _chunked(rows, _CREATE_BATCH_SIZE):
+                await session.execute_write(_create_nodes_batch, label, chunk)
+
+    async def _store_relationships(
+        self,
+        session,
+        rel_rows: list[dict],
+    ) -> None:
+        """Store relationship batches grouped by relationship type using the given session."""
+        rel_rows_by_type: dict[str, list[dict]] = {}
+        for row in rel_rows:
+            t = row["rel_type"].replace(" ", "_")
+            rel_rows_by_type.setdefault(t, []).append(row)
+
+        for rel_type, rows in rel_rows_by_type.items():
+            for chunk in _chunked(rows, _CREATE_BATCH_SIZE):
+                await session.execute_write(_create_relationships_batch, rel_type, chunk)
+
     async def store_mitre_bundle(self, content: MitreBundle) -> None:
         """
         Replace MITRE graph in Neo4j with the given bundle.
@@ -115,42 +179,16 @@ class Neo4jRepo:
             logger.error("Neo4j not available, skipping graph sync")
             return
 
-        by_id: dict[str, MitreObject] = {obj.id: obj for obj in content.objects}
-        nodes = [o for o in content.objects if o.type != "relationship"]
-        relationships = [o for o in content.objects if o.type == "relationship"]
-
-        nodes_by_label: dict[str, list[dict]] = {}
-        for obj in nodes:
-            label = _stix_type_to_label(obj.type)
-            nodes_by_label.setdefault(label, []).append(_node_properties(obj))
-
-        rel_rows: list[dict] = []
-        for rel in relationships:
-            if not rel.source_ref or not rel.target_ref or not rel.relationship_type:
-                continue
-            if rel.source_ref not in by_id or rel.target_ref not in by_id:
-                continue
-            rel_rows.append({
-                "source_ref": rel.source_ref,
-                "target_ref": rel.target_ref,
-                "rel_type": _relationship_type_to_neo4j(rel.relationship_type),
-                "rel_id": rel.id,
-            })
+        nodes_by_label = _preprocess_nodes(content)
+        rel_rows = _preprocess_relationships(content)
+        node_count = sum(len(rows) for rows in nodes_by_label.values())
 
         async with self._driver.session() as session:
-            await session.execute_write(_clear_mitre_graph)
-            for label, rows in nodes_by_label.items():
-                for chunk in _chunked(rows, _CREATE_BATCH_SIZE):
-                    await session.execute_write(_create_nodes_batch, label, chunk)
-            rel_rows_by_type: dict[str, list[dict]] = {}
-            for row in rel_rows:
-                t = row["rel_type"].replace(" ", "_")
-                rel_rows_by_type.setdefault(t, []).append(row)
-            for rel_type, rows in rel_rows_by_type.items():
-                for chunk in _chunked(rows, _CREATE_BATCH_SIZE):
-                    await session.execute_write(_create_relationships_batch, rel_type, chunk)
+            await _clear_mitre_graph(session)
+            await self._store_nodes(session, nodes_by_label)
+            await self._store_relationships(session, rel_rows)
 
-        logger.info("Neo4j: stored %s nodes and %s relationships", len(nodes), len(rel_rows))
+        logger.info("Neo4j: stored %s nodes and %s relationships", node_count, len(rel_rows))
 
     async def get_uses_into_records(
         self,
@@ -176,8 +214,9 @@ class Neo4jRepo:
             ]
 
 
-async def init_neo4j() -> Neo4jRepo:
-    """Connect to Neo4j and return Neo4jRepo. Store in app.state for dependency injection."""
+@asynccontextmanager
+async def connect_neo4j():
+    """Async context manager: connect to Neo4j, ensure constraint, yield Neo4jRepo, then close driver on exit."""
     driver = None
     try:
         driver = AsyncGraphDatabase.driver(
@@ -187,32 +226,30 @@ async def init_neo4j() -> Neo4jRepo:
         async with driver.session() as session:
             await session.execute_write(_ensure_stix_id_constraint)
         logger.info("Neo4j connected")
-        return Neo4jRepo(driver)
+        yield Neo4jRepo(driver)
     except Exception as e:
-        if driver is not None:
-            try:
-                await driver.close()
-            except Exception:
-                pass
         logger.error("Neo4j connection failed (MITRE graph storage will be skipped): %s", e)
-        return Neo4jRepo(None)
+        yield Neo4jRepo(None)
+    finally:
+        if driver is not None:
+            await driver.close()
+            logger.info("Neo4j connection closed")
 
 
-async def close_neo4j(repo: Neo4jRepo) -> None:
-    """Close Neo4j. Call at app shutdown with repo from app.state."""
-    await repo.close()
-
-
-async def _clear_mitre_graph(tx, batch_size: int = _DELETE_BATCH_SIZE) -> None:
-    """Delete all MitreEntity nodes and their relationships in batched transactions."""
-    # Stream nodes and delete in chunks to avoid a single huge transaction.
-    # Outer RETURN required: Neo4j does not allow a query to conclude with CALL.
+async def _clear_mitre_graph(session, batch_size: int = _DELETE_BATCH_SIZE) -> None:
+    """
+    Delete all MitreEntity nodes and their relationships.
+    Uses session.run() (implicit transaction) because CALL { ... } IN TRANSACTIONS
+    is only allowed in auto-commit mode, not inside execute_write().
+    """
     cypher = (
         "MATCH (n:MitreEntity) "
         "CALL { WITH n DETACH DELETE n RETURN 1 AS _ } IN TRANSACTIONS OF $batch_size ROWS "
         "RETURN count(*) AS _"
     )
-    await tx.run(cypher, batch_size=batch_size)
+    result = await session.run(cypher, batch_size=batch_size)
+    async for _ in result:
+        pass
 
 
 async def _create_nodes_batch(tx, label: str, rows: list[dict]) -> None:
