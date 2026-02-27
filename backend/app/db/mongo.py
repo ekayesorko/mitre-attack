@@ -280,6 +280,44 @@ class MongoDBRepo:
         except PyMongoError as e:
             raise MitreDBError(f"Text search failed: {e}") from e
 
+    async def _update_mitre_documents(
+        self,
+        x_mitre_version: str,
+        content: MitreBundle,
+        metadata: MitreMetadata,
+        *,
+        upsert: bool = False,
+    ) -> None:
+        """Update mitre_documents: insert one new version or replace (upsert) existing."""
+        collection = self._db[COLLECTION_DOCUMENTS]
+        doc = {
+            "_id": x_mitre_version,
+            "metadata": metadata.model_dump(mode="json"),
+            "spec_version": content.spec_version,
+            "bundle_id": content.id,
+            "objects": [o.model_dump(mode="json") for o in content.objects],
+        }
+        if upsert:
+            await collection.replace_one({"_id": x_mitre_version}, doc, upsert=True)
+        else:
+            await collection.insert_one(doc)
+
+    async def _update_mitre_entities(self, entity_docs: list[MitreEntityDoc]) -> None:
+        """Replace all documents in mitre_entities with the given entity_docs."""
+        collection = self._db[COLLECTION_LATEST_ENTITIES]
+        await collection.delete_many({})
+        if entity_docs:
+            await collection.insert_many([ed.to_mongo_doc() for ed in entity_docs])
+
+    async def _update_current_schema(self, x_mitre_version: str) -> None:
+        """Set the current x_mitre_version in current_schema."""
+        collection = self._db[COLLECTION_CURRENT_SCHEMA]
+        await collection.replace_one(
+            {"_id": CURRENT_DOC_ID},
+            {"_id": CURRENT_DOC_ID, "x_mitre_version": x_mitre_version},
+            upsert=True,
+        )
+
     async def put_mitre_document(
         self,
         x_mitre_version: str,
@@ -293,29 +331,10 @@ class MongoDBRepo:
         - mitre_entities: replace with provided entity_docs (pre-built with embeddings by caller)
         - mitre_documents: store whole bundle for this version (_id = version)
         """
-        docs_collection = self._db[COLLECTION_DOCUMENTS]
-        entities_collection = self._db[COLLECTION_LATEST_ENTITIES]
-        schema_collection = self._db[COLLECTION_CURRENT_SCHEMA]
-
         try:
-            doc = {
-                "_id": x_mitre_version,
-                "metadata": metadata.model_dump(mode="json"),
-                "spec_version": content.spec_version,
-                "bundle_id": content.id,
-                "objects": [o.model_dump(mode="json") for o in content.objects],
-            }
-            await docs_collection.replace_one({"_id": x_mitre_version}, doc, upsert=True)
-
-            await entities_collection.delete_many({})
-            if entity_docs:
-                await entities_collection.insert_many([ed.to_mongo_doc() for ed in entity_docs])
-
-            await schema_collection.replace_one(
-                {"_id": CURRENT_DOC_ID},
-                {"_id": CURRENT_DOC_ID, "x_mitre_version": x_mitre_version},
-                upsert=True,
-            )
+            await self._update_mitre_documents(x_mitre_version, content, metadata, upsert=True)
+            await self._update_mitre_entities(entity_docs)
+            await self._update_current_schema(x_mitre_version)
         except PyMongoError as e:
             raise MitreDBError(f"Failed to store MITRE document: {e}") from e
 
@@ -327,36 +346,15 @@ class MongoDBRepo:
         entity_docs: list[MitreEntityDoc],
     ) -> None:
         """Insert new MITRE document and entity_docs (pre-built with embeddings by caller)."""
-        docs_collection = self._db[COLLECTION_DOCUMENTS]
-        entities_collection = self._db[COLLECTION_LATEST_ENTITIES]
-        schema_collection = self._db[COLLECTION_CURRENT_SCHEMA]
-
         try:
-            doc = {
-                "_id": x_mitre_version,
-                "metadata": metadata.model_dump(mode="json"),
-                "spec_version": content.spec_version,
-                "bundle_id": content.id,
-                "objects": [o.model_dump(mode="json") for o in content.objects],
-            }
-            await docs_collection.insert_one(doc)
+            await self._update_mitre_documents(x_mitre_version, content, metadata, upsert=False)
         except DuplicateKeyError as e:
             raise DuplicateVersionError(
                 f"MITRE version '{x_mitre_version}' already exists"
             ) from e
-        except PyMongoError as e:
-            raise MitreDBError(f"Failed to store MITRE document: {e}") from e
-
         try:
-            await entities_collection.delete_many({})
-            if entity_docs:
-                await entities_collection.insert_many([ed.to_mongo_doc() for ed in entity_docs])
-
-            await schema_collection.replace_one(
-                {"_id": CURRENT_DOC_ID},
-                {"_id": CURRENT_DOC_ID, "x_mitre_version": x_mitre_version},
-                upsert=True,
-            )
+            await self._update_mitre_entities(entity_docs)
+            await self._update_current_schema(x_mitre_version)
         except PyMongoError as e:
             raise MitreDBError(f"Failed to store MITRE document: {e}") from e
 

@@ -1,7 +1,7 @@
 - create the services and repo when needed. not at application startup
 - divide get api into two function with or without version  DONE
 - mitre.py 176 line: direct access with index without availability checking DONE
-- store mitre data in neo4j use two different function for storing nodes and edges
+- store mitre data in neo4j use two different function for storing nodes and edges DONE 
 - read _ vs __ and dunder method
-- break insert_mitre_document function in mongo.py into create, delete update etc. take business logic into mitre ingestion service
+- break insert_mitre_document function in mongo.py into create, delete update etc. take business logic into mitre ingestion service DONE
 - use decorator for exception handling function in controller. first implement with function.
