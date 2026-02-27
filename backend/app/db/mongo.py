@@ -10,6 +10,7 @@ Set VECTOR_SEARCH_INDEX_NAME to match your Atlas index (default: mitre_entities_
 import asyncio
 import logging
 import time
+from contextlib import asynccontextmanager
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import DuplicateKeyError, PyMongoError
@@ -359,31 +360,18 @@ class MongoDBRepo:
             raise MitreDBError(f"Failed to store MITRE document: {e}") from e
 
 
-async def init_mongo_db() -> tuple[AsyncIOMotorClient, MongoDBRepo]:
-    """Connect to MongoDB, ensure indexes, and return (client, MongoDB). Store client for close_db at shutdown."""
+@asynccontextmanager
+async def connect_mongo():
+    """Async context manager: connect to MongoDB, ensure indexes, yield MongoDBRepo, then close client on exit."""
     client: AsyncIOMotorClient | None = None
     try:
         client = AsyncIOMotorClient(settings.mongodb_uri, serverSelectionTimeoutMS=5000)
         await client.admin.command("ping")
         db = client[DATABASE_NAME]
-
         await db[COLLECTION_LATEST_ENTITIES].create_index([("type", 1)])
         await db[COLLECTION_DOCUMENTS].create_index([("_id", 1)])
         await _ensure_vector_search_index(db)
-
-        return (client, MongoDBRepo(db))
-    except PyMongoError as e:
+        yield MongoDBRepo(db)
+    finally:
         if client is not None:
-            try:
-                client.close()
-            except Exception:
-                pass
-        raise MitreDBError(f"MongoDB connection or init failed: {e}") from e
-
-
-def close_mongo_db(client: AsyncIOMotorClient) -> None:
-    """Close MongoDB connection. Call at app shutdown with client from init_db()."""
-    try:
-        client.close()
-    except Exception:
-        raise
+            client.close()

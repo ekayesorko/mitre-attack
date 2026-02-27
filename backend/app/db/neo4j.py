@@ -1,6 +1,7 @@
 """Neo4j storage for MITRE/STIX data. Syncs bundle objects as nodes and relationship objects as edges."""
 import logging
 import re
+from contextlib import asynccontextmanager
 
 from neo4j import AsyncGraphDatabase
 
@@ -213,8 +214,9 @@ class Neo4jRepo:
             ]
 
 
-async def init_neo4j() -> Neo4jRepo:
-    """Connect to Neo4j and return Neo4jRepo. Store in app.state for dependency injection."""
+@asynccontextmanager
+async def connect_neo4j():
+    """Async context manager: connect to Neo4j, ensure constraint, yield Neo4jRepo, then close driver on exit."""
     driver = None
     try:
         driver = AsyncGraphDatabase.driver(
@@ -224,20 +226,14 @@ async def init_neo4j() -> Neo4jRepo:
         async with driver.session() as session:
             await session.execute_write(_ensure_stix_id_constraint)
         logger.info("Neo4j connected")
-        return Neo4jRepo(driver)
+        yield Neo4jRepo(driver)
     except Exception as e:
-        if driver is not None:
-            try:
-                await driver.close()
-            except Exception:
-                pass
         logger.error("Neo4j connection failed (MITRE graph storage will be skipped): %s", e)
-        return Neo4jRepo(None)
-
-
-async def close_neo4j(repo: Neo4jRepo) -> None:
-    """Close Neo4j. Call at app shutdown with repo from app.state."""
-    await repo.close()
+        yield Neo4jRepo(None)
+    finally:
+        if driver is not None:
+            await driver.close()
+            logger.info("Neo4j connection closed")
 
 
 async def _clear_mitre_graph(session, batch_size: int = _DELETE_BATCH_SIZE) -> None:

@@ -11,7 +11,7 @@ from pythonjsonlogger import jsonlogger
 
 from app.api import chat, graph, mitre, search
 from app.config import settings
-from app.db import close_mongo_db, close_neo4j, init_mongo_db, init_neo4j
+from app.db import connect_mongo, connect_neo4j
 from app.services.chat import RagChatService
 from app.services.embeddings import EmbeddingService
 from app.services.llm import LLMService
@@ -54,34 +54,27 @@ def _log_routes(app: FastAPI) -> None:
 async def lifespan(app: FastAPI):
     logger.info("Lifespan startup: initializing database and neo4j")
     try:
-        mongo_client, mitre_db = await init_mongo_db()
-        app.state.mongo_client = mongo_client
-        app.state.mitre_db = mitre_db
-        neo4j_repo = await init_neo4j()
-        app.state.neo4j_repo = neo4j_repo
-        embedding = EmbeddingService()
-        llm = LLMService()
-        app.state.embedding_service = embedding
-        app.state.llm_service = llm
-        app.state.retrieval_service = RAGRetrievalService(
-            embedding,
-            mitre_db,
-            default_top_k=settings.rag_top_k,
-        )
-        app.state.chat_service = RagChatService(
-            app.state.retrieval_service,
-            llm,
-            rag_top_k=settings.rag_top_k,
-        )
-        app.state.mitre_write_service = MitreWriteService(embedding, mitre_db, neo4j_repo)
-        logger.info("Lifespan startup complete")
+        async with connect_mongo() as mitre_db, connect_neo4j() as neo4j_repo:
+            app.state.mitre_db = mitre_db
+            app.state.neo4j_repo = neo4j_repo
+            app.state.embedding_service = EmbeddingService()
+            app.state.llm_service = LLMService()
+            app.state.retrieval_service = RAGRetrievalService(
+                app.state.embedding_service,
+                app.state.mitre_db,
+                default_top_k=settings.rag_top_k,
+            )
+            app.state.chat_service = RagChatService(
+                app.state.retrieval_service,
+                app.state.llm_service,
+                rag_top_k=settings.rag_top_k,
+            )
+            app.state.mitre_write_service = MitreWriteService(app.state.embedding_service, app.state.mitre_db, app.state.neo4j_repo)
+            logger.info("Lifespan startup complete")
+            yield
     except Exception as e:
         logger.exception("Lifespan startup failed: %s", e)
         raise
-    yield
-    logger.info("Lifespan shutdown: closing database and neo4j")
-    await close_neo4j(app.state.neo4j_repo)
-    close_mongo_db(app.state.mongo_client)
     logger.info("Lifespan shutdown complete")
 
 
