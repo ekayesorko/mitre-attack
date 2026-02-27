@@ -5,9 +5,66 @@ Chat page uses the backend /api/chat endpoint with local conversation history.
 import asyncio
 import json
 import httpx
-from nicegui import ui
+from fastapi.responses import JSONResponse, Response
+from nicegui import app, ui
 
 from config import settings
+
+
+def _trigger_download(proxy_path: str, version: str) -> None:
+    """Trigger browser download via fetch to proxy URL; avoids backend port being inaccessible."""
+    path_js = json.dumps(proxy_path)
+    filename = json.dumps(f"mitre-{version}.json")
+    js = f"""
+    (async () => {{
+        const path = {path_js};
+        const filename = {filename};
+        const url = window.location.origin + path;
+        try {{
+            const r = await fetch(url);
+            if (!r.ok) {{
+                const t = await r.text();
+                throw new Error(r.status + ': ' + (t.slice(0, 100) || r.statusText));
+            }}
+            const blob = await r.blob();
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(a.href);
+        }} catch (e) {{
+            alert('Download failed: ' + e.message);
+        }}
+    }})();
+    """
+    ui.run_javascript(js)
+
+
+@app.get("/api/proxy/mitre/download")
+async def proxy_mitre_download(version: str | None = None):
+    """Proxy MITRE download so the browser hits the frontend (same origin); backend may not be accessible."""
+    url = settings.mitre_download_url(version)
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.get(url)
+    except Exception as e:
+        return JSONResponse(
+            status_code=502,
+            content={"detail": f"Backend unreachable: {e!s}"},
+        )
+    headers = {}
+    if "content-type" in r.headers:
+        headers["Content-Type"] = r.headers["content-type"]
+    if "content-disposition" in r.headers:
+        headers["Content-Disposition"] = r.headers["content-disposition"]
+    return Response(
+        content=r.content,
+        status_code=r.status_code,
+        media_type=r.headers.get("content-type"),
+        headers=headers,
+    )
 
 
 def add_nav():
@@ -102,10 +159,11 @@ def mitre_page():
                     ui.label(version).classes("font-mono font-medium w-24 shrink-0")
                     ui.label(last_mod).classes("text-gray-600 text-sm flex-1")
                     ui.label(f"{size_kb:.1f} KB").classes("text-gray-500 text-sm w-20 shrink-0")
-                    ui.link(
+                    path = settings.mitre_download_proxy_path(version)
+                    ui.button(
                         "Download",
-                        settings.mitre_download_url(version),
-                    ).classes("btn btn-sm btn-outline").props("no-caps target=_blank")
+                        on_click=lambda p=path, ver=version: _trigger_download(p, ver),
+                    ).classes("btn btn-sm btn-outline").props("no-caps")
 
     with ui.column().classes("w-full max-w-4xl mx-auto mt-6 gap-6 px-4"):
         ui.label("MITRE datasets").classes("text-2xl font-bold")

@@ -30,10 +30,17 @@ class Settings:
         self.mitre_content_url = f"{base}/api/mitre/"
 
     def mitre_download_url(self, version: str | None = None) -> str:
-        url = f"{self.api_base}/api/mitre"
+        url = f"{self.api_base}/api/mitre/"
         if version and version.strip():
             return f"{url}?version={version.strip()}"
         return url
+
+    def mitre_download_proxy_path(self, version: str | None = None) -> str:
+        """Relative path for frontend proxy so browser uses same origin (backend port may be inaccessible)."""
+        path = "/api/proxy/mitre/download"
+        if version and version.strip():
+            return f"{path}?version={version.strip()}"
+        return path
 
 
 # Single instance loaded at import
